@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: alexandria-postgres
+    environment:
+      POSTGRES_DB: alexandria
+      POSTGRES_USER: alexandria
+      POSTGRES_PASSWORD: alexandria
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alexandria -d alexandria"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build: .
+    container_name: alexandria-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount library directory (must be configured in .env)
+      - ${ALEXANDRIA_LIBRARY_ROOT:-./library}:/library
+      # Mount source for development (hot reload)
+      - ./src:/app/src
+    environment:
+      - ALEXANDRIA_DB_HOST=postgres
+      - ALEXANDRIA_DB_PORT=5432
+      - ALEXANDRIA_LIBRARY_ROOT=/library
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: node:22-alpine
+    container_name: alexandria-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - API_HOST=backend
+    depends_on:
+      - backend
+    restart: unless-stopped
