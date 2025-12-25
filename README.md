@@ -1,6 +1,16 @@
-# Bibliotheca Alexandria
+<p align="center">
+  <img src="docs/logo.svg" alt="Bibliotheca Alexandria" width="120" height="120">
+</p>
 
-A self-hosted, open-source digital library system for mixed media, organised by classification system.
+<h1 align="center">Bibliotheca Alexandria</h1>
+
+<p align="center">
+  <em>Personal digital library management</em>
+</p>
+
+<p align="center">
+  A self-hosted, open-source digital library system for mixed media, organised by classification system.
+</p>
 
 ## Overview
 
@@ -45,6 +55,10 @@ docker-compose exec backend uv run librarian seed
 ```
 
 Access the web UI at http://localhost:5173
+
+### Production Deployment
+
+Pre-built Docker images are available from GitHub Container Registry. See the [Deployment Guide](docs/deployment.md) for production setup, including Unraid installation.
 
 ### Development Setup
 
@@ -176,6 +190,7 @@ See the [CLI Usage Guide](docs/cli-usage.md) for detailed documentation.
 
 ## Documentation
 
+- [Deployment Guide](docs/deployment.md) - Production deployment and CI/CD setup
 - [Architecture Overview](docs/architecture.md) - System design and data flow
 - [CLI Usage Guide](docs/cli-usage.md) - Command-line interface reference
 - [Database Schema](docs/schema.md) - Data model documentation

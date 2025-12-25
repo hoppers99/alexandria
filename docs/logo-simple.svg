@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="colGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1e3a5f"/>
+      <stop offset="50%" style="stop-color:#2c5282"/>
+      <stop offset="100%" style="stop-color:#1e3a5f"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <circle cx="32" cy="32" r="30" fill="#0f172a" stroke="#D4AF37" stroke-width="1.5"/>
+
+  <!-- Base -->
+  <rect x="14" y="50" width="36" height="3" rx="1" fill="#1e3a5f"/>
+
+  <!-- Left column -->
+  <rect x="17" y="26" width="8" height="24" fill="url(#colGrad)"/>
+  <rect x="16" y="24" width="10" height="3" rx="1" fill="#3b6ea8"/>
+
+  <!-- Right column -->
+  <rect x="39" y="26" width="8" height="24" fill="url(#colGrad)"/>
+  <rect x="38" y="24" width="10" height="3" rx="1" fill="#3b6ea8"/>
+
+  <!-- Architrave -->
+  <rect x="15" y="21" width="34" height="4" rx="1" fill="#2c5282"/>
+
+  <!-- Triangular roof -->
+  <polygon points="32,10 13,21 51,21" fill="#3b6ea8" stroke="#D4AF37" stroke-width="1"/>
+</svg>

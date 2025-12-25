@@ -1,0 +1,53 @@
+# Production Docker Compose - uses pre-built images from GHCR
+# Usage: docker-compose -f docker-compose.prod.yml up -d
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: alexandria-postgres
+    environment:
+      POSTGRES_DB: alexandria
+      POSTGRES_USER: alexandria
+      POSTGRES_PASSWORD: ${ALEXANDRIA_DB_PASSWORD:-alexandria}
+    volumes:
+      - alexandria-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alexandria -d alexandria"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/hoppers99/alexandria-backend:latest
+    container_name: alexandria-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${ALEXANDRIA_LIBRARY_ROOT}:/library
+    environment:
+      - ALEXANDRIA_DB_HOST=postgres
+      - ALEXANDRIA_DB_PORT=5432
+      - ALEXANDRIA_DB_PASSWORD=${ALEXANDRIA_DB_PASSWORD:-alexandria}
+      - ALEXANDRIA_LIBRARY_ROOT=/library
+      - ALEXANDRIA_CONFIDENCE_THRESHOLD=${ALEXANDRIA_CONFIDENCE_THRESHOLD:-0.8}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/hoppers99/alexandria-frontend:latest
+    container_name: alexandria-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - ORIGIN=http://localhost:3000
+      - API_HOST=backend
+      - API_PORT=8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  alexandria-db:

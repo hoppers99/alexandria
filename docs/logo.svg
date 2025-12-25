@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <defs>
+    <linearGradient id="columnGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1e3a5f"/>
+      <stop offset="50%" style="stop-color:#2c5282"/>
+      <stop offset="100%" style="stop-color:#1e3a5f"/>
+    </linearGradient>
+    <linearGradient id="roofGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#2c5282"/>
+      <stop offset="100%" style="stop-color:#3b6ea8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="60" cy="60" r="56" fill="#0f172a" stroke="#D4AF37" stroke-width="2"/>
+
+  <!-- Base/steps -->
+  <rect x="22" y="92" width="76" height="5" rx="1" fill="#1e3a5f"/>
+  <rect x="26" y="87" width="68" height="5" rx="1" fill="#234567"/>
+
+  <!-- Left column -->
+  <rect x="30" y="45" width="14" height="42" fill="url(#columnGrad)"/>
+  <!-- Left column flutes -->
+  <line x1="34" y1="47" x2="34" y2="85" stroke="#1a3050" stroke-width="1"/>
+  <line x1="40" y1="47" x2="40" y2="85" stroke="#1a3050" stroke-width="1"/>
+  <!-- Left column capital -->
+  <rect x="28" y="42" width="18" height="4" rx="1" fill="#3b6ea8"/>
+
+  <!-- Right column -->
+  <rect x="76" y="45" width="14" height="42" fill="url(#columnGrad)"/>
+  <!-- Right column flutes -->
+  <line x1="80" y1="47" x2="80" y2="85" stroke="#1a3050" stroke-width="1"/>
+  <line x1="86" y1="47" x2="86" y2="85" stroke="#1a3050" stroke-width="1"/>
+  <!-- Right column capital -->
+  <rect x="74" y="42" width="18" height="4" rx="1" fill="#3b6ea8"/>
+
+  <!-- Architrave (beam across top) -->
+  <rect x="26" y="36" width="68" height="6" rx="1" fill="#2c5282"/>
+
+  <!-- Triangular pediment (roof) -->
+  <polygon points="60,18 24,36 96,36" fill="url(#roofGrad)" stroke="#D4AF37" stroke-width="1"/>
+
+  <!-- Inner triangle detail -->
+  <polygon points="60,24 34,34 86,34" fill="#1e3a5f" opacity="0.5"/>
+
+  <!-- Pedestal between columns -->
+  <rect x="50" y="74" width="20" height="13" rx="1" fill="#1a3050"/>
+  <rect x="48" y="72" width="24" height="3" rx="1" fill="#234567"/>
+
+  <!-- Open book icon (Heroicons book-open style) - narrower and smaller -->
+  <g transform="translate(60, 65)" fill="none" stroke="#f5f5f5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Center spine line -->
+    <path d="M0 -6 v10"/>
+    <!-- Left page curve - narrower -->
+    <path d="M0 -6 C-1 -7, -3 -7.5, -5 -7.5 C-7 -7.5, -8.5 -7, -9 -6 v10 C-8.5 3, -7 2.5, -5 2.5 C-3 2.5, -1 3, 0 4"/>
+    <!-- Right page curve - narrower -->
+    <path d="M0 -6 C1 -7, 3 -7.5, 5 -7.5 C7 -7.5, 8.5 -7, 9 -6 v10 C8.5 3, 7 2.5, 5 2.5 C3 2.5, 1 3, 0 4"/>
+  </g>
+</svg>
