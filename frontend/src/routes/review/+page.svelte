@@ -2,24 +2,20 @@
 	import {
 		formatBytes,
 		enrichByIsbn,
-		enrichByTitle,
 		searchByTitle,
 		fileSourceFile,
 		skipSourceFile,
-		getAuthors,
-		getSeries,
 		checkDuplicates,
 		type SourceFile,
 		type ReviewList,
 		type ReviewStats,
 		type EnrichedResult,
-		type AuthorSummary,
-		type SeriesSummary,
 		type FileSourceOptions,
 		type PotentialDuplicate,
 		type SearchCandidate
 	} from '$lib/api';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto } from '$app/navigation';
+	import { MetadataForm, SearchPanel, Lightbox, type MetadataValues } from '$lib/components';
 
 	interface Props {
 		data: {
@@ -40,43 +36,32 @@
 	let error = $state<string | null>(null);
 	let success = $state<string | null>(null);
 
-	// Search state
-	let showIsbnSearch = $state(false);
-	let showTitleSearch = $state(false);
-	let searchIsbn = $state('');
-	let searchTitle = $state('');
-	let searchAuthor = $state('');
-	let searchResult = $state<EnrichedResult | null>(null);
-	let searchCandidates = $state<SearchCandidate[]>([]);
-	let isSearching = $state(false);
-
 	// Lightbox state
 	let lightboxImage = $state<string | null>(null);
 	let lightboxTitle = $state<string>('');
 
-	// Editable enriched metadata
-	let editTitle = $state('');
-	let editAuthors = $state<string[]>([]);
-	let editIsbn = $state('');
-	let editPublisher = $state('');
-	let editPublishDate = $state('');
-	let editSeries = $state('');
-	let editSeriesIndex = $state('');
-	let editDdc = $state('');
-	let editDescription = $state('');
-	let editCoverUrl = $state<string | null>(null);
+	// Editable metadata - managed via MetadataForm component
+	let metadataValues = $state<MetadataValues>({
+		title: '',
+		authors: [],
+		isbn: '',
+		ddc: '',
+		series: '',
+		seriesIndex: '',
+		publisher: '',
+		publishDate: '',
+		description: ''
+	});
 
-	// Author/Series autocomplete state
-	let authorQuery = $state('');
-	let authorSuggestions = $state<AuthorSummary[]>([]);
-	let showAuthorSuggestions = $state(false);
-	let seriesQuery = $state('');
-	let seriesSuggestions = $state<SeriesSummary[]>([]);
-	let showSeriesSuggestions = $state(false);
+	// Cover URL from search results
+	let editCoverUrl = $state<string | null>(null);
 
 	// Duplicate detection state
 	let potentialDuplicates = $state<PotentialDuplicate[]>([]);
 	let isCheckingDuplicates = $state(false);
+
+	// Reference to SearchPanel for reset
+	let searchPanel: { reset: () => void } | undefined = $state();
 
 	// Check for duplicates when file changes
 	$effect(() => {
@@ -103,119 +88,121 @@
 	$effect(() => {
 		if (currentFile) {
 			// Start with extracted metadata, prefer any existing enriched data
-			editTitle = currentFile.enriched_title || currentFile.title || '';
-			editAuthors = currentFile.enriched_authors?.length
-				? [...currentFile.enriched_authors]
-				: currentFile.authors?.length
-					? [...currentFile.authors]
-					: [];
-			editIsbn = currentFile.isbn || '';
-			editSeries = currentFile.series || '';
-			editSeriesIndex = currentFile.series_index?.toString() || '';
-			editDdc = currentFile.enriched_ddc || currentFile.classification_ddc || '';
-			editPublisher = '';
-			editPublishDate = '';
-			editDescription = '';
+			metadataValues = {
+				title: currentFile.enriched_title || currentFile.title || '',
+				authors: currentFile.enriched_authors?.length
+					? [...currentFile.enriched_authors]
+					: currentFile.authors?.length
+						? [...currentFile.authors]
+						: [],
+				isbn: currentFile.isbn || '',
+				ddc: currentFile.enriched_ddc || currentFile.classification_ddc || '',
+				series: currentFile.series || '',
+				seriesIndex: currentFile.series_index?.toString() || '',
+				publisher: '',
+				publishDate: '',
+				description: ''
+			};
 			editCoverUrl = null;
-
-			// Also initialize search fields
-			searchIsbn = currentFile.isbn || '';
-			searchTitle = currentFile.enriched_title || currentFile.title || '';
-			searchAuthor = currentFile.enriched_authors?.[0] || currentFile.authors?.[0] || '';
 		}
 	});
 
-	// Search authors for autocomplete
-	async function searchAuthors(query: string) {
-		if (query.length < 2) {
-			authorSuggestions = [];
-			return;
-		}
-		try {
-			const result = await getAuthors({ q: query, per_page: 10 });
-			authorSuggestions = result.authors;
-		} catch {
-			authorSuggestions = [];
-		}
-	}
+	// Derived initial search values
+	let initialSearchIsbn = $derived(currentFile?.isbn || '');
+	let initialSearchTitle = $derived(
+		currentFile?.enriched_title || currentFile?.title || ''
+	);
+	let initialSearchAuthor = $derived(
+		currentFile?.enriched_authors?.[0] || currentFile?.authors?.[0] || ''
+	);
 
-	// Search series for autocomplete
-	async function searchSeriesNames(query: string) {
-		if (query.length < 2) {
-			seriesSuggestions = [];
-			return;
-		}
-		try {
-			const result = await getSeries({ q: query, per_page: 10 });
-			seriesSuggestions = result.series;
-		} catch {
-			seriesSuggestions = [];
-		}
-	}
-
-	function addAuthor(name: string) {
-		if (name && !editAuthors.includes(name)) {
-			editAuthors = [...editAuthors, name];
-		}
-		authorQuery = '';
-		showAuthorSuggestions = false;
-	}
-
-	function removeAuthor(index: number) {
-		editAuthors = editAuthors.filter((_, i) => i !== index);
-	}
-
-	function selectSeries(name: string) {
-		editSeries = name;
-		seriesQuery = '';
-		showSeriesSuggestions = false;
+	function handleMetadataChange(values: MetadataValues) {
+		metadataValues = values;
 	}
 
 	// Apply search result to edit fields - merging, not replacing
-	function applySearchResult() {
-		if (!searchResult || !searchResult.found) return;
+	function handleMergeResult(result: EnrichedResult) {
+		if (!result.found) return;
 
-		// Only fill in fields that are empty or use search data if better
-		if (!editTitle && searchResult.title) editTitle = searchResult.title;
-		if (editAuthors.length === 0 && searchResult.authors?.length) {
-			editAuthors = [...searchResult.authors];
-		}
-		if (!editIsbn && (searchResult.isbn13 || searchResult.isbn)) {
-			editIsbn = searchResult.isbn13 || searchResult.isbn || '';
-		}
-		if (!editPublisher && searchResult.publisher) editPublisher = searchResult.publisher;
-		if (!editPublishDate && searchResult.publish_date) editPublishDate = searchResult.publish_date;
-		if (!editSeries && searchResult.series) {
-			editSeries = searchResult.series;
-			if (searchResult.series_number) editSeriesIndex = searchResult.series_number.toString();
-		}
-		if (!editDdc && searchResult.ddc) editDdc = searchResult.ddc;
-		if (!editDescription && searchResult.description) editDescription = searchResult.description;
-		if (!editCoverUrl && searchResult.cover_url) editCoverUrl = searchResult.cover_url;
+		const newValues = { ...metadataValues };
 
-		// Close search result panel after applying
-		searchResult = null;
+		// Only fill in fields that are empty
+		if (!newValues.title && result.title) newValues.title = result.title;
+		if (newValues.authors.length === 0 && result.authors?.length) {
+			newValues.authors = [...result.authors];
+		}
+		if (!newValues.isbn && (result.isbn13 || result.isbn)) {
+			newValues.isbn = result.isbn13 || result.isbn || '';
+		}
+		if (!newValues.publisher && result.publisher) newValues.publisher = result.publisher;
+		if (!newValues.publishDate && result.publish_date) newValues.publishDate = result.publish_date;
+		if (!newValues.series && result.series) {
+			newValues.series = result.series;
+			if (result.series_number) newValues.seriesIndex = result.series_number.toString();
+		}
+		if (!newValues.ddc && result.ddc) newValues.ddc = result.ddc;
+		if (!newValues.description && result.description) newValues.description = result.description;
+		if (!editCoverUrl && result.cover_url) editCoverUrl = result.cover_url;
+
+		metadataValues = newValues;
 	}
 
 	// Replace all edit fields with search result data
-	function replaceWithSearchResult() {
-		if (!searchResult || !searchResult.found) return;
+	function handleReplaceResult(result: EnrichedResult) {
+		if (!result.found) return;
 
-		if (searchResult.title) editTitle = searchResult.title;
-		if (searchResult.authors?.length) editAuthors = [...searchResult.authors];
-		if (searchResult.isbn13 || searchResult.isbn) editIsbn = searchResult.isbn13 || searchResult.isbn || '';
-		if (searchResult.publisher) editPublisher = searchResult.publisher;
-		if (searchResult.publish_date) editPublishDate = searchResult.publish_date;
-		if (searchResult.series) {
-			editSeries = searchResult.series;
-			if (searchResult.series_number) editSeriesIndex = searchResult.series_number.toString();
+		const newValues = { ...metadataValues };
+
+		if (result.title) newValues.title = result.title;
+		if (result.authors?.length) newValues.authors = [...result.authors];
+		if (result.isbn13 || result.isbn) newValues.isbn = result.isbn13 || result.isbn || '';
+		if (result.publisher) newValues.publisher = result.publisher;
+		if (result.publish_date) newValues.publishDate = result.publish_date;
+		if (result.series) {
+			newValues.series = result.series;
+			if (result.series_number) newValues.seriesIndex = result.series_number.toString();
 		}
-		if (searchResult.ddc) editDdc = searchResult.ddc;
-		if (searchResult.description) editDescription = searchResult.description;
-		if (searchResult.cover_url) editCoverUrl = searchResult.cover_url;
+		if (result.ddc) newValues.ddc = result.ddc;
+		if (result.description) newValues.description = result.description;
+		if (result.cover_url) editCoverUrl = result.cover_url;
 
-		// Close search result panel after applying
-		searchResult = null;
+		metadataValues = newValues;
+	}
+
+	// Apply a search candidate to the edit fields
+	function handleSelectCandidate(candidate: SearchCandidate) {
+		const newValues = { ...metadataValues };
+
+		if (candidate.title) newValues.title = candidate.title;
+		if (candidate.authors?.length) newValues.authors = [...candidate.authors];
+		if (candidate.isbn13 || candidate.isbn) newValues.isbn = candidate.isbn13 || candidate.isbn || '';
+		if (candidate.publisher) newValues.publisher = candidate.publisher;
+		if (candidate.publish_date) newValues.publishDate = candidate.publish_date;
+		if (candidate.series) {
+			newValues.series = candidate.series;
+			if (candidate.series_number) newValues.seriesIndex = candidate.series_number.toString();
+		}
+		if (candidate.ddc) newValues.ddc = candidate.ddc;
+		if (candidate.description) newValues.description = candidate.description;
+		if (candidate.cover_url) editCoverUrl = candidate.cover_url;
+
+		metadataValues = newValues;
+	}
+
+	async function handleSearchIsbn(isbn: string): Promise<EnrichedResult> {
+		if (!currentFile) throw new Error('No file selected');
+		return await enrichByIsbn(currentFile.id, isbn);
+	}
+
+	async function handleSearchTitle(title: string, author?: string): Promise<SearchCandidate[]> {
+		if (!currentFile) throw new Error('No file selected');
+		const result = await searchByTitle(currentFile.id, title, author);
+		return result.candidates;
+	}
+
+	function handleCoverClick(url: string, title: string) {
+		lightboxImage = url;
+		lightboxTitle = title;
 	}
 
 	function clearMessages() {
@@ -225,86 +212,17 @@
 
 	async function handleSkip() {
 		// Clear search state for next file
-		searchResult = null;
-		searchCandidates = [];
-		showIsbnSearch = false;
-		showTitleSearch = false;
+		searchPanel?.reset();
 		// Navigate to next file
 		const nextSkip = data.currentSkip + 1;
 		await goto(`/review?skip=${nextSkip}${data.currentFormat ? `&format=${data.currentFormat}` : ''}`);
-	}
-
-	async function handleSearchIsbn() {
-		if (!currentFile || !searchIsbn.trim()) return;
-
-		clearMessages();
-		isSearching = true;
-		searchResult = null;
-
-		try {
-			const result = await enrichByIsbn(currentFile.id, searchIsbn.trim());
-			searchResult = result;
-
-			if (!result.found) {
-				error = 'No results found for that ISBN';
-			}
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'Search failed';
-		} finally {
-			isSearching = false;
-		}
-	}
-
-	async function handleSearchTitle() {
-		if (!currentFile || !searchTitle.trim()) return;
-
-		clearMessages();
-		isSearching = true;
-		searchResult = null;
-		searchCandidates = [];
-
-		try {
-			const result = await searchByTitle(
-				currentFile.id,
-				searchTitle.trim(),
-				searchAuthor.trim() || undefined
-			);
-			searchCandidates = result.candidates;
-
-			if (result.candidates.length === 0) {
-				error = 'No results found';
-			}
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'Search failed';
-		} finally {
-			isSearching = false;
-		}
-	}
-
-	// Apply a search candidate to the edit fields
-	function applyCandidate(candidate: SearchCandidate) {
-		if (candidate.title) editTitle = candidate.title;
-		if (candidate.authors?.length) editAuthors = [...candidate.authors];
-		if (candidate.isbn13 || candidate.isbn) editIsbn = candidate.isbn13 || candidate.isbn || '';
-		if (candidate.publisher) editPublisher = candidate.publisher;
-		if (candidate.publish_date) editPublishDate = candidate.publish_date;
-		if (candidate.series) {
-			editSeries = candidate.series;
-			if (candidate.series_number) editSeriesIndex = candidate.series_number.toString();
-		}
-		if (candidate.ddc) editDdc = candidate.ddc;
-		if (candidate.description) editDescription = candidate.description;
-		if (candidate.cover_url) editCoverUrl = candidate.cover_url;
-
-		// Clear candidates after selecting
-		searchCandidates = [];
 	}
 
 	async function handleFile() {
 		if (!currentFile) return;
 
 		// Validate we have at least a title
-		if (!editTitle.trim()) {
+		if (!metadataValues.title.trim()) {
 			error = 'Title is required to file';
 			return;
 		}
@@ -315,15 +233,15 @@
 		try {
 			// Build options with edited metadata
 			const options: FileSourceOptions = {
-				edited_title: editTitle.trim(),
-				edited_authors: editAuthors.filter((a) => a.trim()),
-				edited_isbn: editIsbn.trim() || undefined,
-				edited_publisher: editPublisher.trim() || undefined,
-				edited_publish_date: editPublishDate.trim() || undefined,
-				edited_series: editSeries.trim() || undefined,
-				edited_series_index: editSeriesIndex ? parseFloat(editSeriesIndex) : undefined,
-				edited_description: editDescription.trim() || undefined,
-				force_ddc: editDdc.trim() || undefined
+				edited_title: metadataValues.title.trim(),
+				edited_authors: metadataValues.authors.filter((a) => a.trim()),
+				edited_isbn: metadataValues.isbn.trim() || undefined,
+				edited_publisher: metadataValues.publisher.trim() || undefined,
+				edited_publish_date: metadataValues.publishDate.trim() || undefined,
+				edited_series: metadataValues.series.trim() || undefined,
+				edited_series_index: metadataValues.seriesIndex ? parseFloat(metadataValues.seriesIndex) : undefined,
+				edited_description: metadataValues.description.trim() || undefined,
+				force_ddc: metadataValues.ddc.trim() || undefined
 			};
 
 			const result = await fileSourceFile(currentFile.id, options);
@@ -335,10 +253,7 @@
 					success = `Filed as: ${result.item_title}`;
 				}
 				// Clear search state for next file
-				searchResult = null;
-				searchCandidates = [];
-				showIsbnSearch = false;
-				showTitleSearch = false;
+				searchPanel?.reset();
 				potentialDuplicates = [];
 				// Move to next file after a short delay
 				setTimeout(() => {
@@ -364,10 +279,7 @@
 			await skipSourceFile(currentFile.id, status);
 			success = `Marked as ${status}`;
 			// Clear search state for next file
-			searchResult = null;
-			searchCandidates = [];
-			showIsbnSearch = false;
-			showTitleSearch = false;
+			searchPanel?.reset();
 			// Move to next file after a short delay
 			setTimeout(() => {
 				goto(`/review?skip=${data.currentSkip}${data.currentFormat ? `&format=${data.currentFormat}` : ''}`);
@@ -620,510 +532,33 @@
 						<h3 class="text-sm font-semibold text-blue-700 dark:text-blue-300 mb-3">
 							Filing Metadata (editable)
 						</h3>
-						<div class="space-y-3">
-							<!-- Title -->
-							<div>
-								<label for="edit-title" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-									Title
-								</label>
-								<input
-									id="edit-title"
-									type="text"
-									bind:value={editTitle}
-									class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-									placeholder="Enter title..."
-								/>
-							</div>
-
-							<!-- Authors with autocomplete -->
-							<div>
-								<span class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-									Authors
-								</span>
-								<!-- Current authors -->
-								<div class="flex flex-wrap gap-1 mb-2">
-									{#each editAuthors as author, i}
-										<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 dark:bg-blue-800 text-blue-800 dark:text-blue-200 rounded text-xs">
-											{author}
-											<button
-												type="button"
-												onclick={() => removeAuthor(i)}
-												class="hover:text-red-600 dark:hover:text-red-400"
-												aria-label="Remove {author}"
-											>
-												<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-												</svg>
-											</button>
-										</span>
-									{/each}
-								</div>
-								<!-- Add author input -->
-								<div class="relative">
-									<input
-										type="text"
-										bind:value={authorQuery}
-										oninput={() => {
-											searchAuthors(authorQuery);
-											showAuthorSuggestions = true;
-										}}
-										onfocus={() => {
-											if (authorQuery.length >= 2) showAuthorSuggestions = true;
-										}}
-										onblur={() => setTimeout(() => (showAuthorSuggestions = false), 200)}
-										onkeydown={(e) => {
-											if (e.key === 'Enter' && authorQuery.trim()) {
-												e.preventDefault();
-												addAuthor(authorQuery.trim());
-											}
-										}}
-										class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-										placeholder="Type to search or add author..."
-									/>
-									{#if showAuthorSuggestions && authorSuggestions.length > 0}
-										<div class="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-											{#each authorSuggestions as suggestion}
-												<button
-													type="button"
-													onclick={() => addAuthor(suggestion.name)}
-													class="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 dark:hover:bg-blue-900/50 text-gray-900 dark:text-white"
-												>
-													{suggestion.name}
-													<span class="text-xs text-gray-500 dark:text-gray-400 ml-2">
-														({suggestion.book_count} books)
-													</span>
-												</button>
-											{/each}
-										</div>
-									{/if}
-								</div>
-							</div>
-
-							<!-- ISBN and DDC in row -->
-							<div class="grid grid-cols-2 gap-3">
-								<div>
-									<label for="edit-isbn" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-										ISBN
-									</label>
-									<input
-										id="edit-isbn"
-										type="text"
-										bind:value={editIsbn}
-										class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-										placeholder="ISBN..."
-									/>
-								</div>
-								<div>
-									<label for="edit-ddc" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-										DDC Classification
-									</label>
-									<input
-										id="edit-ddc"
-										type="text"
-										bind:value={editDdc}
-										class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-										placeholder="e.g. 813.54"
-									/>
-								</div>
-							</div>
-
-							<!-- Series with autocomplete -->
-							<div class="grid grid-cols-3 gap-3">
-								<div class="col-span-2 relative">
-									<label for="edit-series" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-										Series
-									</label>
-									<input
-										id="edit-series"
-										type="text"
-										bind:value={editSeries}
-										oninput={() => {
-											seriesQuery = editSeries;
-											searchSeriesNames(editSeries);
-											showSeriesSuggestions = true;
-										}}
-										onfocus={() => {
-											if (editSeries.length >= 2) {
-												seriesQuery = editSeries;
-												searchSeriesNames(editSeries);
-												showSeriesSuggestions = true;
-											}
-										}}
-										onblur={() => setTimeout(() => (showSeriesSuggestions = false), 200)}
-										class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-										placeholder="Series name..."
-									/>
-									{#if showSeriesSuggestions && seriesSuggestions.length > 0}
-										<div class="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-											{#each seriesSuggestions as suggestion}
-												<button
-													type="button"
-													onclick={() => selectSeries(suggestion.name)}
-													class="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 dark:hover:bg-blue-900/50 text-gray-900 dark:text-white"
-												>
-													{suggestion.name}
-													<span class="text-xs text-gray-500 dark:text-gray-400 ml-2">
-														({suggestion.book_count} books)
-													</span>
-												</button>
-											{/each}
-										</div>
-									{/if}
-								</div>
-								<div>
-									<label for="edit-series-index" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-										# in Series
-									</label>
-									<input
-										id="edit-series-index"
-										type="text"
-										bind:value={editSeriesIndex}
-										class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-										placeholder="1"
-									/>
-								</div>
-							</div>
-
-							<!-- Publisher and date -->
-							<div class="grid grid-cols-2 gap-3">
-								<div>
-									<label for="edit-publisher" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-										Publisher
-									</label>
-									<input
-										id="edit-publisher"
-										type="text"
-										bind:value={editPublisher}
-										class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-										placeholder="Publisher..."
-									/>
-								</div>
-								<div>
-									<label for="edit-publish-date" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-										Publish Date
-									</label>
-									<input
-										id="edit-publish-date"
-										type="text"
-										bind:value={editPublishDate}
-										class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-										placeholder="Year or date..."
-									/>
-								</div>
-							</div>
-
-							<!-- Description -->
-							<div>
-								<label for="edit-description" class="block text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
-									Description
-								</label>
-								<textarea
-									id="edit-description"
-									bind:value={editDescription}
-									rows="3"
-									class="w-full px-3 py-1.5 text-sm border border-blue-200 dark:border-blue-700 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y"
-									placeholder="Book description..."
-								></textarea>
-							</div>
-						</div>
+						<MetadataForm
+							values={metadataValues}
+							onChange={handleMetadataChange}
+							variant="blue"
+						/>
 					</div>
 				</div>
 
 				<!-- Search panels -->
-				<div class="border-t border-gray-200 dark:border-gray-700 pt-6 mb-6">
-					<div class="flex gap-2 mb-4">
-						<button
-							onclick={() => {
-								showIsbnSearch = !showIsbnSearch;
-								showTitleSearch = false;
-							}}
-							class="px-3 py-2 text-sm rounded-lg {showIsbnSearch
-								? 'bg-blue-600 text-white'
-								: 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-						>
-							Search by ISBN
-						</button>
-						<button
-							onclick={() => {
-								showTitleSearch = !showTitleSearch;
-								showIsbnSearch = false;
-							}}
-							class="px-3 py-2 text-sm rounded-lg {showTitleSearch
-								? 'bg-blue-600 text-white'
-								: 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-						>
-							Search by Title
-						</button>
-					</div>
-
-					{#if showIsbnSearch}
-						<div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-							<div class="flex gap-2">
-								<input
-									type="text"
-									bind:value={searchIsbn}
-									placeholder="Enter ISBN..."
-									class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-								/>
-								<button
-									onclick={handleSearchIsbn}
-									disabled={isSearching || !searchIsbn.trim()}
-									class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-								>
-									{isSearching ? 'Searching...' : 'Search'}
-								</button>
-							</div>
-						</div>
-					{/if}
-
-					{#if showTitleSearch}
-						<div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 space-y-3">
-							<input
-								type="text"
-								bind:value={searchTitle}
-								placeholder="Title..."
-								class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-							/>
-							<div class="flex gap-2">
-								<input
-									type="text"
-									bind:value={searchAuthor}
-									placeholder="Author (optional)..."
-									class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-								/>
-								<button
-									onclick={handleSearchTitle}
-									disabled={isSearching || !searchTitle.trim()}
-									class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-								>
-									{isSearching ? 'Searching...' : 'Search'}
-								</button>
-							</div>
-						</div>
-					{/if}
-
-					<!-- Multiple Search Candidates Display (from title search) -->
-					{#if searchCandidates.length > 0}
-						<div class="mt-4 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-							<div class="flex items-center justify-between mb-3">
-								<h4 class="text-sm font-semibold text-blue-800 dark:text-blue-200">
-									{searchCandidates.length} Results Found - Select One
-								</h4>
-								<button
-									onclick={() => (searchCandidates = [])}
-									class="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200"
-									aria-label="Dismiss"
-								>
-									<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-									</svg>
-								</button>
-							</div>
-
-							<div class="space-y-3 max-h-96 overflow-y-auto">
-								{#each searchCandidates as candidate, index}
-									<div class="bg-white dark:bg-gray-800 border border-blue-100 dark:border-blue-700 rounded-lg p-3 hover:border-blue-300 dark:hover:border-blue-500 transition-colors">
-										<div class="flex gap-3">
-											<!-- Cover thumbnail -->
-											{#if candidate.cover_url}
-												<button
-													type="button"
-													onclick={() => {
-														lightboxImage = candidate.cover_url;
-														lightboxTitle = candidate.title || 'Cover';
-													}}
-													class="flex-shrink-0 cursor-zoom-in"
-												>
-													<img
-														src={candidate.cover_url}
-														alt="Cover"
-														class="w-16 h-24 object-cover rounded shadow-sm hover:opacity-80 transition-opacity"
-													/>
-												</button>
-											{:else}
-												<div class="w-16 h-24 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center text-gray-400 text-xs flex-shrink-0">
-													No cover
-												</div>
-											{/if}
-
-											<!-- Candidate details -->
-											<div class="flex-1 min-w-0">
-												<div class="flex items-start justify-between gap-2">
-													<div class="min-w-0">
-														<h5 class="font-medium text-gray-900 dark:text-white truncate">
-															{candidate.title || '[No title]'}
-														</h5>
-														<p class="text-sm text-gray-600 dark:text-gray-400 truncate">
-															{candidate.authors?.join(', ') || '[No authors]'}
-														</p>
-													</div>
-													<span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0 {candidate.source === 'google_books' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'}">
-														{candidate.source === 'google_books' ? 'Google' : 'Open Library'}
-													</span>
-												</div>
-
-												<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
-													{#if candidate.publish_date}
-														<span>{candidate.publish_date}</span>
-													{/if}
-													{#if candidate.publisher}
-														<span class="truncate max-w-32">{candidate.publisher}</span>
-													{/if}
-													{#if candidate.isbn13 || candidate.isbn}
-														<span class="font-mono">{candidate.isbn13 || candidate.isbn}</span>
-													{/if}
-													{#if candidate.ddc}
-														<span class="font-mono text-purple-600 dark:text-purple-400">DDC: {candidate.ddc}</span>
-													{/if}
-												</div>
-
-												{#if candidate.description}
-													<p class="mt-1 text-xs text-gray-500 dark:text-gray-400 line-clamp-2">
-														{candidate.description}
-													</p>
-												{/if}
-											</div>
-
-											<!-- Select button -->
-											<button
-												onclick={() => applyCandidate(candidate)}
-												class="flex-shrink-0 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 font-medium self-center"
-											>
-												Use
-											</button>
-										</div>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/if}
-
-					<!-- Search Result Display (from ISBN search - single result) -->
-					{#if searchResult && searchResult.found}
-						<div class="mt-4 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
-							<div class="flex items-start justify-between mb-3">
-								<h4 class="text-sm font-semibold text-green-800 dark:text-green-200">
-									Match Found - Apply to Filing Metadata?
-								</h4>
-								<button
-									onclick={() => (searchResult = null)}
-									class="text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-200"
-									aria-label="Dismiss"
-								>
-									<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-									</svg>
-								</button>
-							</div>
-
-							<div class="flex gap-4 mb-4">
-								<!-- Cover image from search result -->
-								{#if searchResult.cover_url}
-									<div class="flex-shrink-0">
-										<button
-											type="button"
-											onclick={() => {
-												lightboxImage = searchResult!.cover_url;
-												lightboxTitle = 'Search Result Cover';
-											}}
-											class="cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-green-500 rounded"
-										>
-											<img
-												src={searchResult.cover_url}
-												alt="Cover"
-												class="w-24 h-36 object-cover rounded shadow-md hover:opacity-90 transition-opacity"
-											/>
-										</button>
-									</div>
-								{/if}
-
-								<!-- Metadata -->
-								<dl class="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-									<div>
-										<dt class="text-green-700 dark:text-green-300 font-medium">Title</dt>
-										<dd class="text-gray-900 dark:text-white">{searchResult.title || '[none]'}</dd>
-									</div>
-									<div>
-										<dt class="text-green-700 dark:text-green-300 font-medium">Authors</dt>
-										<dd class="text-gray-900 dark:text-white">{searchResult.authors?.join(', ') || '[none]'}</dd>
-									</div>
-									{#if searchResult.series}
-										<div>
-											<dt class="text-green-700 dark:text-green-300 font-medium">Series</dt>
-											<dd class="text-gray-900 dark:text-white">
-												{searchResult.series}{#if searchResult.series_number} #{searchResult.series_number}{/if}
-											</dd>
-										</div>
-									{/if}
-									{#if searchResult.isbn13 || searchResult.isbn}
-										<div>
-											<dt class="text-green-700 dark:text-green-300 font-medium">ISBN</dt>
-											<dd class="text-gray-900 dark:text-white font-mono">{searchResult.isbn13 || searchResult.isbn}</dd>
-										</div>
-									{/if}
-									{#if searchResult.publisher}
-										<div>
-											<dt class="text-green-700 dark:text-green-300 font-medium">Publisher</dt>
-											<dd class="text-gray-900 dark:text-white">{searchResult.publisher}</dd>
-										</div>
-									{/if}
-									{#if searchResult.publish_date}
-										<div>
-											<dt class="text-green-700 dark:text-green-300 font-medium">Published</dt>
-											<dd class="text-gray-900 dark:text-white">{searchResult.publish_date}</dd>
-										</div>
-									{/if}
-									{#if searchResult.ddc}
-										<div>
-											<dt class="text-green-700 dark:text-green-300 font-medium">DDC Classification</dt>
-											<dd class="text-gray-900 dark:text-white font-mono">{searchResult.ddc}</dd>
-										</div>
-									{/if}
-									{#if searchResult.subjects && searchResult.subjects.length > 0}
-										<div class="md:col-span-2">
-											<dt class="text-green-700 dark:text-green-300 font-medium">Subjects</dt>
-											<dd class="text-gray-900 dark:text-white text-xs">{searchResult.subjects.slice(0, 5).join(', ')}</dd>
-										</div>
-									{/if}
-									{#if searchResult.description}
-										<div class="md:col-span-2">
-											<dt class="text-green-700 dark:text-green-300 font-medium">Description</dt>
-											<dd class="text-gray-700 dark:text-gray-300 text-xs line-clamp-3">{searchResult.description}</dd>
-										</div>
-									{/if}
-								</dl>
-							</div>
-
-							<!-- Action buttons -->
-							<div class="flex gap-2 pt-2 border-t border-green-200 dark:border-green-800">
-								<button
-									onclick={applySearchResult}
-									class="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 font-medium"
-								>
-									Merge (fill gaps)
-								</button>
-								<button
-									onclick={replaceWithSearchResult}
-									class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
-								>
-									Replace all
-								</button>
-								<button
-									onclick={() => (searchResult = null)}
-									class="px-3 py-1.5 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
-								>
-									Dismiss
-								</button>
-							</div>
-						</div>
-					{/if}
-				</div>
+				<SearchPanel
+					bind:this={searchPanel}
+					initialIsbn={initialSearchIsbn}
+					initialTitle={initialSearchTitle}
+					initialAuthor={initialSearchAuthor}
+					onSearchIsbn={handleSearchIsbn}
+					onSearchTitle={handleSearchTitle}
+					onSelectCandidate={handleSelectCandidate}
+					onMergeResult={handleMergeResult}
+					onReplaceResult={handleReplaceResult}
+					onCoverClick={handleCoverClick}
+				/>
 
 				<!-- Actions -->
-				<div class="flex flex-wrap gap-3">
+				<div class="flex flex-wrap gap-3 mt-6">
 					<button
 						onclick={handleFile}
-						disabled={isLoading || !editTitle.trim()}
+						disabled={isLoading || !metadataValues.title.trim()}
 						class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium"
 					>
 						{isLoading ? 'Filing...' : 'File to Library'}
@@ -1159,40 +594,8 @@
 </div>
 
 <!-- Lightbox Modal -->
-{#if lightboxImage}
-	<div
-		class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-		onclick={() => (lightboxImage = null)}
-		onkeydown={(e) => e.key === 'Escape' && (lightboxImage = null)}
-		role="dialog"
-		aria-modal="true"
-		aria-label={lightboxTitle}
-		tabindex="-1"
-	>
-		<div class="relative max-w-3xl max-h-[90vh]">
-			<!-- Close button -->
-			<button
-				onclick={() => (lightboxImage = null)}
-				class="absolute -top-10 right-0 text-white hover:text-gray-300 p-2"
-				aria-label="Close"
-			>
-				<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-				</svg>
-			</button>
-
-			<!-- Title -->
-			<div class="absolute -top-10 left-0 text-white text-lg font-medium">
-				{lightboxTitle}
-			</div>
-
-			<!-- Image -->
-			<img
-				src={lightboxImage}
-				alt={lightboxTitle}
-				class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
-				onclick={(e) => e.stopPropagation()}
-			/>
-		</div>
-	</div>
-{/if}
+<Lightbox
+	imageUrl={lightboxImage}
+	title={lightboxTitle}
+	onClose={() => (lightboxImage = null)}
+/>

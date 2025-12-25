@@ -1,7 +1,10 @@
 <script lang="ts">
-	import type { EnrichedResult, SearchCandidate } from '$lib/api';
+	import type { EnrichedResult, SearchCandidate, ItemSearchCandidate } from '$lib/api';
 	import SearchCandidateCard from './SearchCandidateCard.svelte';
 	import SearchResultCard from './SearchResultCard.svelte';
+
+	// Accept both review queue candidates and item enrichment candidates
+	type CandidateType = SearchCandidate | ItemSearchCandidate;
 
 	interface Props {
 		/** Initial ISBN value */
@@ -13,15 +16,17 @@
 		/** Callback when ISBN search is requested */
 		onSearchIsbn: (isbn: string) => Promise<EnrichedResult>;
 		/** Callback when title search is requested */
-		onSearchTitle: (title: string, author?: string) => Promise<SearchCandidate[]>;
+		onSearchTitle: (title: string, author?: string) => Promise<CandidateType[]>;
 		/** Callback when a candidate is selected */
-		onSelectCandidate: (candidate: SearchCandidate) => void;
+		onSelectCandidate: (candidate: CandidateType) => void;
 		/** Callback to merge enriched result */
 		onMergeResult: (result: EnrichedResult) => void;
 		/** Callback to replace with enriched result */
 		onReplaceResult: (result: EnrichedResult) => void;
 		/** Callback when cover is clicked for lightbox */
 		onCoverClick?: (url: string, title: string) => void;
+		/** Callback when "Use Cover" is clicked */
+		onUseCover?: (url: string) => void;
 	}
 
 	let {
@@ -33,30 +38,27 @@
 		onSelectCandidate,
 		onMergeResult,
 		onReplaceResult,
-		onCoverClick
+		onCoverClick,
+		onUseCover
 	}: Props = $props();
 
 	// Search state
 	let showIsbnSearch = $state(false);
 	let showTitleSearch = $state(false);
-	let searchIsbn = $state(initialIsbn);
-	let searchTitle = $state(initialTitle);
-	let searchAuthor = $state(initialAuthor);
+	let searchIsbn = $state('');
+	let searchTitle = $state('');
+	let searchAuthor = $state('');
 	let isSearching = $state(false);
 	let searchError = $state<string | null>(null);
 
 	// Results
 	let searchResult = $state<EnrichedResult | null>(null);
-	let searchCandidates = $state<SearchCandidate[]>([]);
+	let searchCandidates = $state<CandidateType[]>([]);
 
-	// Update initial values when props change
+	// Initialize search values from props
 	$effect(() => {
 		searchIsbn = initialIsbn;
-	});
-	$effect(() => {
 		searchTitle = initialTitle;
-	});
-	$effect(() => {
 		searchAuthor = initialAuthor;
 	});
 
@@ -103,7 +105,7 @@
 		}
 	}
 
-	function handleSelectCandidate(candidate: SearchCandidate) {
+	function handleSelectCandidate(candidate: CandidateType) {
 		onSelectCandidate(candidate);
 		searchCandidates = [];
 	}
@@ -248,6 +250,7 @@
 						{candidate}
 						onSelect={handleSelectCandidate}
 						{onCoverClick}
+						{onUseCover}
 					/>
 				{/each}
 			</div>
@@ -262,6 +265,7 @@
 			onReplace={handleReplace}
 			onDismiss={dismissResult}
 			{onCoverClick}
+			{onUseCover}
 		/>
 	{/if}
 </div>

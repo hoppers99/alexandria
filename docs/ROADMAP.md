@@ -52,13 +52,14 @@ Allow users to preview the first chapter without downloading the full file.
 
 ### Component Refactoring
 
-**Status**: Deferred
+**Status**: Complete
 
-The review page (`frontend/src/routes/review/+page.svelte`) has significant overlap with the item edit modal. Shared components exist but aren't yet used by the review page.
+The review page now uses shared components, reducing code duplication:
 
-- [ ] Refactor review page to use `MetadataForm` component
-- [ ] Refactor review page to use `SearchPanel` component
-- [ ] Reduce code duplication
+- [x] Refactor review page to use `MetadataForm` component
+- [x] Refactor review page to use `SearchPanel` component
+- [x] Refactor review page to use `Lightbox` component
+- [x] Reduced review page from ~1200 lines to ~600 lines
 
 ### OPDS Feed
 

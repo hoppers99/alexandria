@@ -41,13 +41,18 @@
 				</div>
 			{/if}
 
-			<!-- Image -->
-			<img
-				src={imageUrl}
-				alt={title}
-				class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+			<!-- Image - wrapped in button to handle click without propagating -->
+			<button
+				type="button"
 				onclick={(e) => e.stopPropagation()}
-			/>
+				class="cursor-default focus:outline-none"
+			>
+				<img
+					src={imageUrl}
+					alt={title}
+					class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+				/>
+			</button>
 		</div>
 	</div>
 {/if}
