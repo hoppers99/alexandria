@@ -12,6 +12,8 @@
 		removeItemsFromPile,
 		enrichItemByIsbn,
 		searchItemByTitle,
+		setItemCover,
+		uploadItemCover,
 		type ItemDetail,
 		type ItemUpdate,
 		type PileSummary,
@@ -99,7 +101,7 @@
 
 	// Edit modal state
 	let showEditModal = $state(false);
-	let editTab = $state<'metadata' | 'enrich' | 'refile' | 'authors'>('metadata');
+	let editTab = $state<'metadata' | 'enrich' | 'cover' | 'refile' | 'authors'>('metadata');
 	let saving = $state(false);
 	let saveError = $state<string | null>(null);
 	let saveSuccess = $state<string | null>(null);
@@ -133,6 +135,38 @@
 	// Author fix state
 	let selectedCreatorId = $state<number | null>(null);
 	let correctedAuthorName = $state('');
+
+	// Cover upload state
+	let coverFileInput = $state<HTMLInputElement | null>(null);
+	let coverUrlInput = $state('');
+
+	async function handleCoverUpload(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (!input.files?.length) return;
+
+		saving = true;
+		saveError = null;
+		saveSuccess = null;
+
+		try {
+			const result = await uploadItemCover(item.id, input.files[0]);
+			if (result.success && result.cover_url) {
+				item = { ...item, cover_url: `${result.cover_url}?t=${Date.now()}` };
+				saveSuccess = 'Cover uploaded successfully';
+			}
+		} catch (e) {
+			saveError = e instanceof Error ? e.message : 'Failed to upload cover';
+		} finally {
+			saving = false;
+			if (input) input.value = '';
+		}
+	}
+
+	async function handleCoverFromUrl() {
+		if (!coverUrlInput.trim()) return;
+		await handleUseCover(coverUrlInput.trim());
+		coverUrlInput = '';
+	}
 
 	function openEditModal() {
 		// Reset form to current values
@@ -253,6 +287,25 @@
 	function openLightbox(url: string, title: string) {
 		lightboxImage = url;
 		lightboxTitle = title;
+	}
+
+	async function handleUseCover(url: string) {
+		saving = true;
+		saveError = null;
+		saveSuccess = null;
+
+		try {
+			const result = await setItemCover(item.id, url);
+			if (result.success && result.cover_url) {
+				// Update local state with cache-busting query param
+				item = { ...item, cover_url: `${result.cover_url}?t=${Date.now()}` };
+				saveSuccess = 'Cover updated successfully';
+			}
+		} catch (e) {
+			saveError = e instanceof Error ? e.message : 'Failed to set cover';
+		} finally {
+			saving = false;
+		}
 	}
 
 	function closeEditModal() {
@@ -691,6 +744,14 @@
 					Enrich
 				</button>
 				<button
+					class="px-4 py-3 text-sm font-medium {editTab === 'cover'
+						? 'text-blue-600 border-b-2 border-blue-600'
+						: 'text-gray-500 hover:text-gray-700 dark:text-gray-400'}"
+					onclick={() => (editTab = 'cover')}
+				>
+					Cover
+				</button>
+				<button
 					class="px-4 py-3 text-sm font-medium {editTab === 'refile'
 						? 'text-blue-600 border-b-2 border-blue-600'
 						: 'text-gray-500 hover:text-gray-700 dark:text-gray-400'}"
@@ -907,6 +968,7 @@
 											{candidate}
 											onSelect={applyCandidate}
 											onCoverClick={openLightbox}
+											onUseCover={handleUseCover}
 										/>
 									{/each}
 								</div>
@@ -921,8 +983,80 @@
 								onReplace={applySearchResultReplace}
 								onDismiss={() => (searchResult = null)}
 								onCoverClick={openLightbox}
+								onUseCover={handleUseCover}
 							/>
 						{/if}
+					</div>
+				{:else if editTab === 'cover'}
+					<div class="space-y-6">
+						<p class="text-sm text-gray-600 dark:text-gray-400">
+							Change the cover image by uploading a file or entering an image URL.
+						</p>
+
+						<!-- Current cover preview -->
+						<div class="flex items-start gap-4">
+							<div class="w-32 aspect-[2/3] bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden shadow">
+								{#if item.cover_url}
+									<img src={item.cover_url} alt={item.title} class="w-full h-full object-cover" />
+								{:else}
+									<div class="w-full h-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
+										No cover
+									</div>
+								{/if}
+							</div>
+							<div class="flex-1 space-y-4">
+								<!-- Upload file -->
+								<div>
+									<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+										Upload Image
+									</label>
+									<input
+										type="file"
+										accept="image/*"
+										bind:this={coverFileInput}
+										onchange={handleCoverUpload}
+										disabled={saving}
+										class="block w-full text-sm text-gray-500 dark:text-gray-400
+											file:mr-4 file:py-2 file:px-4
+											file:rounded-lg file:border-0
+											file:text-sm file:font-medium
+											file:bg-blue-50 file:text-blue-700
+											dark:file:bg-blue-900/30 dark:file:text-blue-300
+											hover:file:bg-blue-100 dark:hover:file:bg-blue-900/50
+											file:cursor-pointer cursor-pointer
+											disabled:opacity-50 disabled:cursor-not-allowed"
+									/>
+								</div>
+
+								<!-- Or from URL -->
+								<div>
+									<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+										Or from URL
+									</label>
+									<div class="flex gap-2">
+										<input
+											type="url"
+											bind:value={coverUrlInput}
+											placeholder="https://example.com/cover.jpg"
+											disabled={saving}
+											class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+											onkeydown={(e) => e.key === 'Enter' && handleCoverFromUrl()}
+										/>
+										<button
+											onclick={handleCoverFromUrl}
+											disabled={saving || !coverUrlInput.trim()}
+											class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-medium"
+										>
+											{saving ? 'Setting...' : 'Set'}
+										</button>
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<p class="text-xs text-gray-500 dark:text-gray-400">
+							Tip: You can also set a cover from search results in the Enrich tab.
+						</p>
 					</div>
 				{:else if editTab === 'refile'}
 					<div class="space-y-4">

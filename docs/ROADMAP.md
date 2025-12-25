@@ -19,15 +19,14 @@ The core cataloguing pipeline and web UI are functional. Key features working:
 
 ### Cover Management
 
-**Status**: Planned
+**Status**: Complete
 
-Currently, covers come from the source file or enrichment APIs during initial filing. Improving existing items' covers requires manual work.
-
-Planned features:
-- [ ] Search for covers from external sources (Google Books, Open Library)
-- [ ] "Use this cover" button on search results
-- [ ] Upload custom cover images
-- [ ] `POST /api/items/{id}/cover` endpoint
+Users can now update covers for existing items:
+- [x] Search for covers from external sources (Google Books, Open Library)
+- [x] "Use this cover" button on search results
+- [x] Upload custom cover images
+- [x] `POST /api/items/{id}/cover` endpoint
+- [x] New "Cover" tab in book edit modal
 
 ### Background/Backdrop Images
 

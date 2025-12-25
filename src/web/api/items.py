@@ -2,6 +2,7 @@
 
 from typing import Annotated
 
+import fastapi
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -327,6 +328,84 @@ async def get_cover(
         cover_path,
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+class SetCoverRequest(BaseModel):
+    """Request to set cover from URL."""
+
+    url: str
+
+
+class SetCoverResponse(BaseModel):
+    """Response after setting cover."""
+
+    success: bool
+    cover_url: str | None
+
+
+@router.post("/{item_id}/cover", response_model=SetCoverResponse)
+async def set_cover(
+    item_id: int,
+    request: SetCoverRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Set item cover from a URL."""
+    from librarian.covers import download_cover, process_cover, save_cover
+
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Download the cover
+    cover_data = await download_cover(request.url)
+    if not cover_data:
+        raise HTTPException(status_code=400, detail="Failed to download cover from URL")
+
+    # Process and save
+    processed = process_cover(cover_data)
+    save_cover(processed, item.uuid)
+
+    # Update item's cover path
+    item.cover_path = f".covers/{item.uuid}.jpg"
+    db.commit()
+
+    return SetCoverResponse(
+        success=True,
+        cover_url=f"/api/items/{item_id}/cover",
+    )
+
+
+@router.post("/{item_id}/cover/upload", response_model=SetCoverResponse)
+async def upload_cover(
+    item_id: int,
+    file: Annotated[bytes, fastapi.File()],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Upload a cover image file."""
+    from librarian.covers import process_cover, save_cover
+
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if not file:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    # Process and save
+    try:
+        processed = process_cover(file)
+        save_cover(processed, item.uuid)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to process image: {e}") from None
+
+    # Update item's cover path
+    item.cover_path = f".covers/{item.uuid}.jpg"
+    db.commit()
+
+    return SetCoverResponse(
+        success=True,
+        cover_url=f"/api/items/{item_id}/cover",
     )
 
 
