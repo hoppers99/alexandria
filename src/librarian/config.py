@@ -37,6 +37,11 @@ class Settings(BaseSettings):
         """Alias for returns_dir - where source files awaiting review are located."""
         return self.returns_dir
 
+    @property
+    def covers_dir(self) -> Path:
+        """Directory for cover images."""
+        return self.library_root / ".covers"
+
     # Calibre integration (optional, for metadata enrichment during migration)
     calibre_library: Path | None = Field(default=None)
     enable_calibre: bool = False

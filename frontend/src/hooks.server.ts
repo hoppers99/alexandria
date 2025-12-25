@@ -1,13 +1,16 @@
 import type { Handle } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 
 // In production, proxy /api requests to the backend service
+// In dev mode, Vite handles the proxy
 const API_HOST = process.env.API_HOST || 'localhost';
 const API_PORT = process.env.API_PORT || '8000';
 const API_BASE_URL = `http://${API_HOST}:${API_PORT}`;
 
 export const handle: Handle = async ({ event, resolve }) => {
-	// Proxy /api requests to backend
-	if (event.url.pathname.startsWith('/api/')) {
+	// In dev mode, let Vite's proxy handle /api requests
+	// In production, proxy them to the backend service
+	if (!dev && event.url.pathname.startsWith('/api/')) {
 		const apiUrl = `${API_BASE_URL}${event.url.pathname}${event.url.search}`;
 
 		const response = await fetch(apiUrl, {

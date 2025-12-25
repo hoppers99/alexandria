@@ -5,6 +5,7 @@ from librarian.covers.covers import (
     extract_cover,
     get_cover,
     process_cover,
+    save_cover,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "extract_cover",
     "get_cover",
     "process_cover",
+    "save_cover",
 ]

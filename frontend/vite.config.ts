@@ -9,8 +9,14 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		proxy: {
-			'/api': `http://${apiHost}:8000`,
-			'/graphql': `http://${apiHost}:8000`,
+			'/api': {
+				target: `http://${apiHost}:8000`,
+				changeOrigin: true,
+			},
+			'/graphql': {
+				target: `http://${apiHost}:8000`,
+				changeOrigin: true,
+			},
 		}
 	},
 	optimizeDeps: {
