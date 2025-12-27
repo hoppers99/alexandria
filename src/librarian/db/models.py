@@ -188,8 +188,9 @@ class Item(Base):
     page_count: Mapped[int | None] = mapped_column(Integer)
     duration_seconds: Mapped[int | None] = mapped_column(Integer)
 
-    # Cover
+    # Cover and backdrop
     cover_path: Mapped[str | None] = mapped_column(String(500))
+    backdrop_path: Mapped[str | None] = mapped_column(String(500))
 
     # Timestamps
     date_added: Mapped[datetime] = mapped_column(DateTime, default=func.now())
@@ -280,6 +281,46 @@ class ItemCreator(Base):
 
 
 # =============================================================================
+# Reading progress
+# =============================================================================
+
+
+class ReadingProgress(Base):
+    """Tracks reading progress for items."""
+
+    __tablename__ = "reading_progress"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("items.id", ondelete="CASCADE"), nullable=False
+    )
+    file_id: Mapped[int] = mapped_column(
+        ForeignKey("files.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Progress tracking
+    progress: Mapped[float] = mapped_column(Numeric(5, 4), default=0)  # 0.0000 to 1.0000
+    location: Mapped[str | None] = mapped_column(Text)  # CFI or other location marker
+    location_label: Mapped[str | None] = mapped_column(String(500))  # Human-readable location
+
+    # Timestamps
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    last_read_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    # Relationships
+    item: Mapped["Item"] = relationship("Item", backref="reading_progress")
+    file: Mapped["File"] = relationship("File")
+
+    __table_args__ = (
+        Index("idx_reading_progress_item", "item_id"),
+        Index("idx_reading_progress_last_read", "last_read_at"),
+    )
+
+
+# =============================================================================
 # Migration tracking
 # =============================================================================
 
@@ -347,6 +388,37 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     last_login: Mapped[datetime | None] = mapped_column(DateTime)
 
+    # Relationships
+    sessions: Mapped[list["Session"]] = relationship(
+        "Session", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Session(Base):
+    """User sessions for authentication."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # Session token
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    ip_address: Mapped[str | None] = mapped_column(String(45))  # IPv6 max length
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    last_accessed: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="sessions")
+
+    __table_args__ = (
+        Index("idx_sessions_user", "user_id"),
+        Index("idx_sessions_expires", "expires_at"),
+    )
+
 
 # =============================================================================
 # Collections
@@ -362,7 +434,10 @@ class Collection(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    color: Mapped[str | None] = mapped_column(String(7))  # Hex colour e.g. "#3b82f6"
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    system_key: Mapped[str | None] = mapped_column(String(50))  # e.g. "currently_reading", "to_read"
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
@@ -381,6 +456,7 @@ class Collection(Base):
             "is_public",
             postgresql_where="is_public = true",
         ),
+        Index("idx_collections_system_key", "user_id", "system_key"),
     )
 
 

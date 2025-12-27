@@ -46,6 +46,11 @@ class WebSettings(BaseSettings):
     enable_registration: bool = False
     guest_access: bool = False
 
+    # Auto-admin creation (for first-time setup)
+    admin_username: str | None = None
+    admin_password: str | None = None
+    admin_email: str | None = None
+
     @property
     def database_url(self) -> str:
         """Construct database URL from components."""

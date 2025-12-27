@@ -1,5 +1,7 @@
 """Main FastAPI application for Alexandria Web UI."""
 
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,8 +9,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from web import __version__
-from web.api import authors, items, piles, review, series, stats
+from web.api import auth, authors, items, piles, review, series, stats
 from web.config import settings
+from web.database import SessionLocal
+from web.startup import run_startup_tasks
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown tasks."""
+    # Startup
+    logger.info("Starting Alexandria Web UI...")
+
+    # Run all startup tasks (migrations, seeding, admin creation)
+    db = SessionLocal()
+    try:
+        run_startup_tasks(db)
+    finally:
+        db.close()
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down Alexandria Web UI...")
+
 
 app = FastAPI(
     title="Alexandria",
@@ -17,6 +43,7 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
+    lifespan=lifespan,
 )
 
 # CORS middleware for development
@@ -29,6 +56,7 @@ app.add_middleware(
 )
 
 # API routes
+app.include_router(auth.router)
 app.include_router(items.router, prefix="/api")
 app.include_router(authors.router, prefix="/api")
 app.include_router(series.router, prefix="/api")

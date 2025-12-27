@@ -341,6 +341,227 @@ def review(limit: int, skip: int, file_format: str | None) -> None:
         console.print(f"[blue]Reviewed {len(pending_files)} files. {total_pending - len(pending_files) - skip} remaining.[/blue]")
 
 
+@main.command(name="create-admin")
+@click.option("--username", prompt=True, help="Admin username")
+@click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True, help="Admin password")
+@click.option("--email", prompt=True, default="", help="Admin email (optional)")
+@click.option("--display-name", default=None, help="Display name (optional)")
+def create_admin(username: str, password: str, email: str | None, display_name: str | None) -> None:
+    """Create an admin user for the web UI."""
+    from librarian.db.session import get_session
+    from web.auth.service import RegistrationError, register_user
+
+    email = email if email else None
+
+    console.print("[bold blue]Creating admin user[/bold blue]")
+    console.print(f"  Username: {username}")
+    if email:
+        console.print(f"  Email: {email}")
+    console.print()
+
+    try:
+        with get_session() as session:
+            user = register_user(
+                db=session,
+                username=username,
+                password=password,
+                email=email,
+                display_name=display_name,
+                is_admin=True,  # Always create as admin
+            )
+            console.print(f"[green]✓ Admin user created successfully![/green]")
+            console.print(f"  User ID: {user.id}")
+            console.print(f"  Username: {user.username}")
+            console.print(f"  Admin: {user.is_admin}")
+    except RegistrationError as e:
+        console.print(f"[red]✗ Failed to create admin user: {e}[/red]")
+    except Exception as e:
+        console.print(f"[red]✗ Unexpected error: {e}[/red]")
+
+
+@main.command(name="backup")
+@click.argument("output", type=click.Path())
+@click.option("--format", "backup_format", type=click.Choice(["custom", "sql"]), default="custom",
+              help="Backup format: 'custom' (pg_dump custom format, recommended) or 'sql' (plain SQL)")
+@click.option("--compress", "-z", type=int, default=6, help="Compression level (0-9, default 6)")
+def backup(output: str, backup_format: str, compress: int) -> None:
+    """Backup the Alexandria database to a file.
+
+    OUTPUT is the path where the backup file will be saved.
+
+    Examples:
+      librarian backup alexandria_backup.dump
+      librarian backup --format sql alexandria_backup.sql
+      librarian backup --compress 9 alexandria_backup.dump.gz
+    """
+    import subprocess
+    from datetime import datetime
+
+    from librarian.config import settings
+
+    output_path = Path(output)
+
+    console.print("[bold blue]Backing up Alexandria database[/bold blue]")
+    console.print(f"  Database: {settings.db_name}")
+    console.print(f"  Output: {output_path.absolute()}")
+    console.print(f"  Format: {backup_format}")
+    console.print(f"  Compression: {compress}")
+    console.print()
+
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Construct pg_dump command
+    env = {
+        "PGPASSWORD": settings.db_password,
+    }
+
+    if backup_format == "custom":
+        cmd = [
+            "pg_dump",
+            "-h", settings.db_host,
+            "-p", str(settings.db_port),
+            "-U", settings.db_user,
+            "-d", settings.db_name,
+            "-F", "c",  # Custom format
+            "-Z", str(compress),  # Compression
+            "-f", str(output_path),
+        ]
+    else:  # sql format
+        cmd = [
+            "pg_dump",
+            "-h", settings.db_host,
+            "-p", str(settings.db_port),
+            "-U", settings.db_user,
+            "-d", settings.db_name,
+            "-f", str(output_path),
+        ]
+
+    try:
+        console.print("[yellow]Running pg_dump...[/yellow]")
+        result = subprocess.run(
+            cmd,
+            env={**dict(subprocess.os.environ), **env},
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode == 0:
+            # Get file size
+            size_mb = output_path.stat().st_size / (1024 * 1024)
+            console.print(f"[green]✓ Backup completed successfully![/green]")
+            console.print(f"  File size: {size_mb:.2f} MB")
+            console.print(f"  Location: {output_path.absolute()}")
+            console.print()
+            console.print("[dim]To restore this backup, use: librarian restore {output}[/dim]")
+        else:
+            console.print(f"[red]✗ Backup failed![/red]")
+            console.print(f"  Error: {result.stderr}")
+    except FileNotFoundError:
+        console.print("[red]✗ pg_dump command not found![/red]")
+        console.print("  Make sure PostgreSQL client tools are installed.")
+    except Exception as e:
+        console.print(f"[red]✗ Unexpected error: {e}[/red]")
+
+
+@main.command(name="restore")
+@click.argument("backup_file", type=click.Path(exists=True))
+@click.option("--drop", is_flag=True, help="Drop existing database objects before restoring")
+@click.option("--clean", is_flag=True, help="Clean (drop) database objects before recreating them")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def restore(backup_file: str, drop: bool, clean: bool, yes: bool) -> None:
+    """Restore the Alexandria database from a backup file.
+
+    BACKUP_FILE is the path to the backup file created with 'librarian backup'.
+
+    WARNING: This will overwrite the current database!
+
+    Examples:
+      librarian restore alexandria_backup.dump
+      librarian restore --clean alexandria_backup.dump
+      librarian restore --yes alexandria_backup.sql
+    """
+    import subprocess
+
+    from librarian.config import settings
+
+    backup_path = Path(backup_file)
+
+    console.print("[bold yellow]⚠️  Database Restore[/bold yellow]")
+    console.print(f"  Database: {settings.db_name}")
+    console.print(f"  Backup file: {backup_path.absolute()}")
+    console.print()
+    console.print("[bold red]WARNING: This will overwrite the current database![/bold red]")
+    console.print()
+
+    if not yes:
+        if not click.confirm("Do you want to continue?", default=False):
+            console.print("[yellow]Restore cancelled.[/yellow]")
+            return
+
+    # Determine if it's a custom format or SQL
+    is_custom_format = backup_path.suffix in [".dump", ".backup"]
+
+    env = {
+        "PGPASSWORD": settings.db_password,
+    }
+
+    if is_custom_format:
+        # Use pg_restore for custom format
+        cmd = [
+            "pg_restore",
+            "-h", settings.db_host,
+            "-p", str(settings.db_port),
+            "-U", settings.db_user,
+            "-d", settings.db_name,
+        ]
+
+        if clean:
+            cmd.append("--clean")
+
+        if drop:
+            cmd.append("--if-exists")
+
+        cmd.append(str(backup_path))
+    else:
+        # Use psql for SQL format
+        cmd = [
+            "psql",
+            "-h", settings.db_host,
+            "-p", str(settings.db_port),
+            "-U", settings.db_user,
+            "-d", settings.db_name,
+            "-f", str(backup_path),
+        ]
+
+    try:
+        console.print("[yellow]Running restore...[/yellow]")
+        result = subprocess.run(
+            cmd,
+            env={**dict(subprocess.os.environ), **env},
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode == 0:
+            console.print(f"[green]✓ Restore completed successfully![/green]")
+            console.print()
+            console.print("[dim]You may need to restart the web server to pick up the changes.[/dim]")
+        else:
+            console.print(f"[red]✗ Restore failed![/red]")
+            if result.stderr:
+                console.print(f"  Error: {result.stderr}")
+            # Note: pg_restore may have warnings but still succeed
+            if "ERROR" not in result.stderr:
+                console.print("[yellow]  Note: Some warnings may be normal during restore.[/yellow]")
+    except FileNotFoundError as e:
+        tool = "pg_restore" if is_custom_format else "psql"
+        console.print(f"[red]✗ {tool} command not found![/red]")
+        console.print("  Make sure PostgreSQL client tools are installed.")
+    except Exception as e:
+        console.print(f"[red]✗ Unexpected error: {e}[/red]")
+
+
 @main.group()
 def migrate() -> None:
     """Migration commands for importing existing library."""
