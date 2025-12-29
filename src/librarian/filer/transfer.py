@@ -119,3 +119,44 @@ def cleanup_empty_parents(directory: Path, stop_at: Path) -> None:
                 break
     except OSError:
         pass  # Non-fatal
+
+
+def move_to_trash(
+    file_path: Path,
+    library_root: Path,
+    trash_dir: Path,
+    cleanup_parents: bool = True,
+) -> Path | None:
+    """
+    Move a file to the trash directory, preserving its relative path.
+
+    Args:
+        file_path: Absolute path to the file to trash
+        library_root: Library root directory (for calculating relative path)
+        trash_dir: Trash directory root
+        cleanup_parents: If True, clean up empty parent directories after move
+
+    Returns:
+        Path to the file in trash, or None if the file didn't exist
+    """
+    if not file_path.exists():
+        logger.warning(f"File does not exist, cannot trash: {file_path}")
+        return None
+
+    # Calculate relative path from library root
+    try:
+        relative_path = file_path.relative_to(library_root)
+    except ValueError:
+        # File is not under library root - use filename only
+        relative_path = Path(file_path.name)
+
+    trash_path = trash_dir / relative_path
+    trash_path.parent.mkdir(parents=True, exist_ok=True)
+
+    shutil.move(str(file_path), str(trash_path))
+    logger.info(f"Moved to trash: {file_path} -> {trash_path}")
+
+    if cleanup_parents:
+        cleanup_empty_parents(file_path.parent, library_root)
+
+    return trash_path

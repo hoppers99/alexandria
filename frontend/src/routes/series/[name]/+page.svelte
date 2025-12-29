@@ -49,14 +49,7 @@
 	{:else}
 		<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
 			{#each data.series.books as item (item.id)}
-				<div class="relative">
-					{#if item.series_index}
-						<div class="absolute top-2 left-2 z-10 bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded">
-							#{item.series_index}
-						</div>
-					{/if}
-					<BookCard {item} />
-				</div>
+				<BookCard {item} />
 			{/each}
 		</div>
 	{/if}

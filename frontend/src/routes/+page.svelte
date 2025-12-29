@@ -1,15 +1,32 @@
 <script lang="ts">
 	import BookCard from '$lib/components/BookCard.svelte';
-	import { formatBytes, type ItemSummary, type LibraryStats } from '$lib/api';
+	import { formatBytes, type ItemSummary, type LibraryStats, type CurrentlyReadingItem } from '$lib/api';
 
 	interface Props {
 		data: {
 			recentItems: ItemSummary[];
 			stats: LibraryStats;
+			currentlyReading: CurrentlyReadingItem[];
 		};
 	}
 
 	let { data }: Props = $props();
+
+	// Format relative time
+	function formatRelativeTime(isoDate: string): string {
+		const date = new Date(isoDate);
+		const now = new Date();
+		const diffMs = now.getTime() - date.getTime();
+		const diffMins = Math.floor(diffMs / (1000 * 60));
+		const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+		const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+		if (diffMins < 1) return 'Just now';
+		if (diffMins < 60) return `${diffMins}m ago`;
+		if (diffHours < 24) return `${diffHours}h ago`;
+		if (diffDays < 7) return `${diffDays}d ago`;
+		return date.toLocaleDateString();
+	}
 </script>
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -44,6 +61,26 @@
 			{/each}
 		</div>
 	</div>
+
+	<!-- Currently Reading -->
+	{#if data.currentlyReading && data.currentlyReading.length > 0}
+		<section class="mb-8">
+			<div class="flex justify-between items-center mb-4">
+				<h2 class="text-xl font-semibold text-gray-900 dark:text-white">Currently Reading</h2>
+			</div>
+
+			<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+				{#each data.currentlyReading as reading (reading.item.id)}
+					<div class="relative">
+						<BookCard item={reading.item} progress={reading.progress} />
+						<div class="mt-1 text-xs text-gray-500 dark:text-gray-400 text-center">
+							{Math.round(reading.progress * 100)}% · {formatRelativeTime(reading.last_read_at)}
+						</div>
+					</div>
+				{/each}
+			</div>
+		</section>
+	{/if}
 
 	<!-- Recently added -->
 	<section>

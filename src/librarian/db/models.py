@@ -16,6 +16,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
@@ -291,6 +292,9 @@ class ReadingProgress(Base):
     __tablename__ = "reading_progress"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     item_id: Mapped[int] = mapped_column(
         ForeignKey("items.id", ondelete="CASCADE"), nullable=False
     )
@@ -311,12 +315,15 @@ class ReadingProgress(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # Relationships
+    user: Mapped["User"] = relationship("User")
     item: Mapped["Item"] = relationship("Item", backref="reading_progress")
     file: Mapped["File"] = relationship("File")
 
     __table_args__ = (
         Index("idx_reading_progress_item", "item_id"),
+        Index("idx_reading_progress_user", "user_id"),
         Index("idx_reading_progress_last_read", "last_read_at"),
+        UniqueConstraint("user_id", "item_id", name="uq_reading_progress_user_item"),
     )
 
 
@@ -417,6 +424,35 @@ class Session(Base):
     __table_args__ = (
         Index("idx_sessions_user", "user_id"),
         Index("idx_sessions_expires", "expires_at"),
+    )
+
+
+class AuditLog(Base):
+    """Audit log for security events and admin actions."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    event_category: Mapped[str] = mapped_column(String(20), nullable=False)
+    resource_type: Mapped[str | None] = mapped_column(String(50))
+    resource_id: Mapped[int | None] = mapped_column(Integer)
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    # Relationships
+    user: Mapped["User | None"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_audit_user", "user_id"),
+        Index("idx_audit_event_type", "event_type"),
+        Index("idx_audit_created", "created_at"),
+        Index("idx_audit_category", "event_category"),
     )
 
 

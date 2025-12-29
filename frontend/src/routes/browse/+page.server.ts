@@ -9,7 +9,10 @@ export const load: PageServerLoad = async ({ fetch, url }) => {
 	const format = url.searchParams.get('format') || undefined;
 	const media_type = url.searchParams.get('media_type') || undefined;
 
-	const data = await getItems({ page, per_page: 24, sort, order, q, format, media_type }, fetch);
+	const data = await getItems(
+		{ page, per_page: 24, sort, order, q, format, media_type, include_piles: true },
+		fetch
+	);
 
 	return {
 		...data,

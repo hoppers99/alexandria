@@ -303,8 +303,8 @@ def _find_or_create_item(
         if existing:
             return existing
 
-    # Try to find by title + first author (for books without ISBN)
-    existing = _find_by_title_and_author(session, title, authors)
+    # Try to find by title + first author + series_index (for books without ISBN)
+    existing = _find_by_title_and_author(session, title, authors, series_index)
     if existing:
         return existing
 
@@ -369,12 +369,19 @@ def _find_by_title_and_author(
     session: Session,
     title: str,
     authors: list[str],
+    series_index: float | None = None,
 ) -> Item | None:
     """
-    Find an existing item by matching title and first author.
+    Find an existing item by matching title, first author, and series_index.
 
     This handles cases where we have the same book in different formats
     (e.g., epub and mobi) but no ISBN to match on.
+
+    Args:
+        session: Database session
+        title: Book title to match
+        authors: List of author names
+        series_index: Series index to match (if provided, must match exactly)
     """
     if not title:
         return None
@@ -410,6 +417,17 @@ def _find_by_title_and_author(
             if candidate_creators:
                 candidate_first_author = candidate_creators[0].name.strip().lower()
                 if candidate_first_author == first_author:
+                    # Also check series_index if provided
+                    # If both have series_index, they must match
+                    # If incoming has series_index but candidate doesn't, no match
+                    # If incoming has no series_index but candidate does, no match
+                    if series_index is not None:
+                        if candidate.series_index is None:
+                            continue  # Different: new has index, existing doesn't
+                        if abs(float(candidate.series_index) - series_index) > 0.01:
+                            continue  # Different series index
+                    elif candidate.series_index is not None:
+                        continue  # Different: existing has index, new doesn't
                     return candidate
 
         # No author match found
@@ -418,7 +436,16 @@ def _find_by_title_and_author(
     # No authors provided - only match if there's exactly one candidate
     # to avoid false positives with common titles
     if len(candidates) == 1:
-        return candidates[0]
+        candidate = candidates[0]
+        # Still check series_index
+        if series_index is not None:
+            if candidate.series_index is None:
+                return None
+            if abs(float(candidate.series_index) - series_index) > 0.01:
+                return None
+        elif candidate.series_index is not None:
+            return None
+        return candidate
 
     return None
 

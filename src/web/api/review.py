@@ -18,6 +18,7 @@ from librarian.enricher import EnrichedMetadata, enrich_by_isbn, enrich_by_title
 from librarian.enricher.google_books import search_by_title_author as google_search
 from librarian.enricher.openlibrary import search_by_title_author as ol_search
 from librarian.filer import file_item
+from web.auth.dependencies import CurrentAdmin
 from web.database import get_db
 
 router = APIRouter(prefix="/review", tags=["review"])
@@ -381,6 +382,7 @@ async def get_review_stats(db: Annotated[Session, Depends(get_db)]):
 async def get_source_file(
     source_file_id: int,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Get a single source file for review."""
     sf = db.execute(
@@ -397,6 +399,7 @@ async def get_source_file(
 async def check_duplicates(
     source_file_id: int,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Check if this source file may be a duplicate of an existing item."""
     sf = db.execute(
@@ -427,6 +430,7 @@ async def enrich_source_file_by_isbn(
     source_file_id: int,
     request: EnrichByIsbnRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Search for metadata by ISBN."""
     sf = db.execute(
@@ -488,6 +492,7 @@ async def enrich_source_file_by_title(
     source_file_id: int,
     request: EnrichByTitleRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Search for metadata by title and author."""
     sf = db.execute(
@@ -550,6 +555,7 @@ async def search_by_title(
     source_file_id: int,
     request: EnrichByTitleRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """
     Search for books by title/author, returning multiple candidates.
@@ -627,6 +633,7 @@ async def file_source_file(
     source_file_id: int,
     request: FileSourceRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """File a source file into the library."""
     sf = db.execute(
@@ -742,6 +749,7 @@ async def skip_source_file(
     source_file_id: int,
     request: SkipRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Skip or mark a source file as duplicate."""
     sf = db.execute(
@@ -764,6 +772,7 @@ async def skip_source_file(
 async def get_source_file_cover(
     source_file_id: int,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Extract and return the cover image from a source file."""
     sf = db.execute(

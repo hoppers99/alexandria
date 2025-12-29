@@ -287,10 +287,10 @@
 								</svg>
 							{/if}
 						</div>
-						<BookCard {item} />
+						<BookCard {item} progress={item.progress ?? undefined} pileColor={data.pile.color} />
 					</div>
 				{:else}
-					<BookCard {item} />
+					<BookCard {item} progress={item.progress ?? undefined} pileColor={data.pile.color} />
 				{/if}
 			{/each}
 		</div>

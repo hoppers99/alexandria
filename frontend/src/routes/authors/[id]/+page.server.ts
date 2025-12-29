@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ fetch, params, url }) => {
 	try {
 		const [author, books] = await Promise.all([
 			getAuthor(id, fetch),
-			getItems({ author_id: id, page, per_page: 24 }, fetch)
+			getItems({ author_id: id, page, per_page: 24, include_piles: true }, fetch)
 		]);
 
 		return {

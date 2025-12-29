@@ -3,6 +3,14 @@
 // Base URL - in SSR context, need absolute URL to backend
 const API_BASE = '/api';
 
+export interface PileInfo {
+	id: number;
+	name: string;
+	color: string | null;
+	is_system: boolean;
+	system_key: string | null;
+}
+
 export interface ItemSummary {
 	id: number;
 	uuid: string;
@@ -10,10 +18,17 @@ export interface ItemSummary {
 	subtitle: string | null;
 	authors: string[];
 	cover_url: string | null;
+	backdrop_url: string | null;
 	series_name: string | null;
 	series_index: number | null;
 	media_type: string;
 	formats: string[];
+	piles?: PileInfo[] | null;
+}
+
+export interface ItemWithProgress extends ItemSummary {
+	progress: number | null;
+	last_read_at: string | null;
 }
 
 export interface ItemDetail extends ItemSummary {
@@ -107,6 +122,30 @@ export interface LibraryStats {
 	migration_status: Record<string, number> | null;
 }
 
+export interface MonthlyRead {
+	month: string;
+	count: number;
+}
+
+export interface RecentFinish {
+	item_id: number;
+	title: string;
+	finished_at: string | null;
+}
+
+export interface ReadingStats {
+	books_read: number;
+	books_in_progress: number;
+	books_not_started: number;
+	total_books: number;
+	read_this_year: number;
+	read_this_month: number;
+	reading_streak_days: number;
+	last_read_date: string | null;
+	monthly_reads: MonthlyRead[];
+	recent_finishes: RecentFinish[];
+}
+
 // Type for SvelteKit's fetch function
 type FetchFunction = typeof fetch;
 
@@ -119,22 +158,34 @@ async function fetchJson<T>(url: string, customFetch?: FetchFunction): Promise<T
 	return response.json();
 }
 
-export async function getRecentItems(limit = 12, customFetch?: FetchFunction): Promise<ItemSummary[]> {
-	return fetchJson<ItemSummary[]>(`${API_BASE}/items/recent?limit=${limit}`, customFetch);
+export async function getRecentItems(
+	limit = 12,
+	customFetch?: FetchFunction,
+	includePiles = false
+): Promise<ItemSummary[]> {
+	const params = new URLSearchParams({ limit: String(limit) });
+	if (includePiles) {
+		params.set('include_piles', 'true');
+	}
+	return fetchJson<ItemSummary[]>(`${API_BASE}/items/recent?${params}`, customFetch);
 }
 
-export async function getItems(params: {
-	page?: number;
-	per_page?: number;
-	sort?: string;
-	order?: string;
-	q?: string;
-	author_id?: number;
-	series?: string;
-	tag?: string;
-	format?: string;
-	media_type?: string;
-} = {}, customFetch?: FetchFunction): Promise<PaginatedItems> {
+export async function getItems(
+	params: {
+		page?: number;
+		per_page?: number;
+		sort?: string;
+		order?: string;
+		q?: string;
+		author_id?: number;
+		series?: string;
+		tag?: string;
+		format?: string;
+		media_type?: string;
+		include_piles?: boolean;
+	} = {},
+	customFetch?: FetchFunction
+): Promise<PaginatedItems> {
 	const searchParams = new URLSearchParams();
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined) {
@@ -168,6 +219,10 @@ export async function getStats(customFetch?: FetchFunction): Promise<LibraryStat
 	return fetchJson<LibraryStats>(`${API_BASE}/stats`, customFetch);
 }
 
+export async function getReadingStats(customFetch?: FetchFunction): Promise<ReadingStats> {
+	return fetchJson<ReadingStats>(`${API_BASE}/stats/reading`, customFetch);
+}
+
 export async function getAuthor(id: number, customFetch?: FetchFunction): Promise<AuthorDetail> {
 	return fetchJson<AuthorDetail>(`${API_BASE}/authors/${id}`, customFetch);
 }
@@ -188,8 +243,13 @@ export async function getSeries(params: {
 	return fetchJson<PaginatedSeries>(`${API_BASE}/series?${searchParams}`, customFetch);
 }
 
-export async function getSeriesDetail(name: string, customFetch?: FetchFunction): Promise<SeriesDetail> {
-	return fetchJson<SeriesDetail>(`${API_BASE}/series/${encodeURIComponent(name)}`, customFetch);
+export async function getSeriesDetail(
+	name: string,
+	customFetch?: FetchFunction,
+	includePiles = false
+): Promise<SeriesDetail> {
+	const params = includePiles ? '?include_piles=true' : '';
+	return fetchJson<SeriesDetail>(`${API_BASE}/series/${encodeURIComponent(name)}${params}`, customFetch);
 }
 
 export function formatBytes(bytes: number): string {
@@ -358,6 +418,74 @@ export async function uploadItemCover(
 }
 
 // =============================================================================
+// Backdrop management
+// =============================================================================
+
+export interface SetBackdropResponse {
+	success: boolean;
+	backdrop_url: string | null;
+}
+
+/**
+ * Set item backdrop from a URL.
+ */
+export async function setItemBackdrop(
+	itemId: number,
+	url: string,
+	customFetch?: FetchFunction
+): Promise<SetBackdropResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/backdrop`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ url })
+	});
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Upload a backdrop image file.
+ */
+export async function uploadItemBackdrop(
+	itemId: number,
+	file: File,
+	customFetch?: FetchFunction
+): Promise<SetBackdropResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const formData = new FormData();
+	formData.append('file', file);
+
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/backdrop/upload`, {
+		method: 'POST',
+		body: formData
+	});
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Remove the backdrop image for an item.
+ */
+export async function removeItemBackdrop(
+	itemId: number,
+	customFetch?: FetchFunction
+): Promise<SetBackdropResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/backdrop`, {
+		method: 'DELETE'
+	});
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+// =============================================================================
 // Item enrichment (for improving existing item metadata)
 // =============================================================================
 
@@ -468,15 +596,21 @@ export interface PileSummary {
 	id: number;
 	name: string;
 	description: string | null;
+	color: string | null;
 	item_count: number;
 	first_cover_url: string | null;
+	is_system: boolean;
+	system_key: string | null;
 }
 
 export interface PileDetail {
 	id: number;
 	name: string;
 	description: string | null;
-	items: ItemSummary[];
+	color: string | null;
+	items: ItemWithProgress[];
+	is_system: boolean;
+	system_key: string | null;
 }
 
 export interface PileList {
@@ -809,5 +943,265 @@ export async function searchByTitle(
 	if (!response.ok) {
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
+	return response.json();
+}
+
+// =============================================================================
+// Reading progress
+// =============================================================================
+
+export interface ReadingProgress {
+	item_id: number;
+	file_id: number;
+	progress: number; // 0.0 to 1.0
+	location: string | null;
+	location_label: string | null;
+	started_at: string;
+	last_read_at: string;
+	finished_at: string | null;
+}
+
+export interface ReadingProgressResponse {
+	success: boolean;
+	progress: ReadingProgress | null;
+}
+
+export interface CurrentlyReadingItem {
+	item: ItemSummary;
+	progress: number;
+	location_label: string | null;
+	last_read_at: string;
+}
+
+export interface CurrentlyReadingResponse {
+	items: CurrentlyReadingItem[];
+}
+
+/**
+ * Get reading progress for an item.
+ */
+export async function getReadingProgress(
+	itemId: number,
+	customFetch?: FetchFunction
+): Promise<ReadingProgressResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/progress`);
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Update reading progress for an item.
+ */
+export async function updateReadingProgress(
+	itemId: number,
+	fileId: number,
+	progress: number,
+	location?: string,
+	locationLabel?: string,
+	finished?: boolean,
+	customFetch?: FetchFunction
+): Promise<ReadingProgressResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/progress`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			file_id: fileId,
+			progress,
+			location: location ?? null,
+			location_label: locationLabel ?? null,
+			finished: finished ?? false
+		})
+	});
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Mark an item as finished reading (without needing file ID).
+ * Useful for physical books or manually marking as read.
+ */
+export async function markAsFinished(
+	itemId: number,
+	customFetch?: FetchFunction
+): Promise<ReadingProgressResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/progress/finish`, {
+		method: 'POST'
+	});
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Mark an item as not finished (resume reading).
+ * Clears finished_at and moves back to Currently Reading.
+ */
+export async function markAsUnfinished(
+	itemId: number,
+	customFetch?: FetchFunction
+): Promise<ReadingProgressResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/progress/unfinish`, {
+		method: 'POST'
+	});
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Delete reading progress (mark as unread).
+ */
+export async function deleteReadingProgress(
+	itemId: number,
+	customFetch?: FetchFunction
+): Promise<{ success: boolean }> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/items/${itemId}/progress`, {
+		method: 'DELETE'
+	});
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Get currently reading items (started but not finished).
+ */
+export async function getCurrentlyReading(
+	limit: number = 20,
+	customFetch?: FetchFunction,
+	includePiles = false
+): Promise<CurrentlyReadingResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const params = new URLSearchParams({ limit: String(limit) });
+	if (includePiles) {
+		params.set('include_piles', 'true');
+	}
+	const response = await fetchFn(`${API_BASE}/items/reading/current?${params}`);
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+// =============================================================================
+// Authentication
+// =============================================================================
+
+export interface User {
+	id: number;
+	username: string;
+	email: string | null;
+	display_name: string | null;
+	is_admin: boolean;
+	can_download: boolean;
+	created_at: string;
+	last_login: string | null;
+}
+
+export interface LoginResponse {
+	user: User;
+	message: string;
+}
+
+/**
+ * Log in with username and password.
+ * Sets httpOnly session cookie automatically.
+ */
+export async function login(
+	username: string,
+	password: string,
+	rememberMe: boolean = false,
+	customFetch?: FetchFunction
+): Promise<LoginResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/auth/login`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ username, password, remember_me: rememberMe }),
+		credentials: 'include' // Include cookies in request and response
+	});
+
+	if (!response.ok) {
+		if (response.status === 401) {
+			throw new Error('Invalid username or password');
+		}
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Log out the current user.
+ * Clears session cookie.
+ */
+export async function logout(customFetch?: FetchFunction): Promise<void> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/auth/logout`, {
+		method: 'POST',
+		credentials: 'include' // Include cookies
+	});
+
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+}
+
+/**
+ * Get current user information.
+ * Returns user if authenticated, throws 401 if not.
+ */
+export async function getCurrentUser(customFetch?: FetchFunction): Promise<User> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/auth/me`, {
+		credentials: 'include' // Include cookies
+	});
+
+	if (!response.ok) {
+		if (response.status === 401) {
+			throw new Error('Not authenticated');
+		}
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Change password for current user.
+ */
+export async function changePassword(
+	currentPassword: string,
+	newPassword: string,
+	customFetch?: FetchFunction
+): Promise<{ message: string }> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/auth/change-password`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			current_password: currentPassword,
+			new_password: newPassword
+		}),
+		credentials: 'include' // Include cookies
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+	}
+
 	return response.json();
 }

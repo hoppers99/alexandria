@@ -33,6 +33,10 @@
 	}
 
 	async function handleDeletePile(pile: PileSummary) {
+		if (pile.is_system) {
+			return; // Cannot delete system piles
+		}
+
 		if (!confirm(`Are you sure you want to delete "${pile.name}"? This cannot be undone.`)) {
 			return;
 		}
@@ -44,6 +48,13 @@
 			console.error('Failed to delete pile:', err);
 		}
 	}
+
+	// Icons for system piles
+	const systemPileIcons: Record<string, string> = {
+		to_read: '📚',
+		currently_reading: '📖',
+		read: '✓'
+	};
 </script>
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -125,7 +136,10 @@
 					<div class="p-4">
 						<div class="flex justify-between items-start">
 							<div>
-								<h2 class="font-semibold text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400">
+								<h2 class="font-semibold text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 flex items-center gap-2">
+									{#if pile.is_system && pile.system_key}
+										<span class="text-lg">{systemPileIcons[pile.system_key] || ''}</span>
+									{/if}
 									{pile.name}
 								</h2>
 								{#if pile.description}
@@ -134,24 +148,26 @@
 									</p>
 								{/if}
 							</div>
-							<button
-								onclick={(e) => {
-									e.preventDefault();
-									e.stopPropagation();
-									handleDeletePile(pile);
-								}}
-								class="p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400"
-								title="Delete pile"
-							>
-								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-									/>
-								</svg>
-							</button>
+							{#if !pile.is_system}
+								<button
+									onclick={(e) => {
+										e.preventDefault();
+										e.stopPropagation();
+										handleDeletePile(pile);
+									}}
+									class="p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400"
+									title="Delete pile"
+								>
+									<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+										/>
+									</svg>
+								</button>
+							{/if}
 						</div>
 					</div>
 				</a>

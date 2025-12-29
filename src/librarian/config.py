@@ -42,6 +42,16 @@ class Settings(BaseSettings):
         """Directory for cover images."""
         return self.library_root / ".covers"
 
+    @property
+    def backdrops_dir(self) -> Path:
+        """Directory for backdrop images."""
+        return self.library_root / ".backdrops"
+
+    @property
+    def trash_dir(self) -> Path:
+        """Directory for deleted files (soft delete)."""
+        return self.library_root / ".trash"
+
     # Calibre integration (optional, for metadata enrichment during migration)
     calibre_library: Path | None = Field(default=None)
     enable_calibre: bool = False

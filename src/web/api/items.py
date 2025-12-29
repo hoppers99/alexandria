@@ -4,21 +4,84 @@ from typing import Annotated
 
 import fastapi
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from librarian.config import settings as librarian_settings
-from librarian.db.models import Creator, File, Item, ItemCreator
+from librarian.db.models import Collection, CollectionItem, Creator, File, Item, ItemCreator
 from librarian.enricher import enrich_by_isbn, enrich_by_title_author
 from librarian.enricher.google_books import search_by_title_author as google_search
 from librarian.enricher.openlibrary import search_by_title_author as ol_search
+from web.audit.service import log_audit_event, AuditEventType
+from web.auth.dependencies import CurrentAdmin, CurrentUser
 from web.config import settings
 from web.database import get_db
 
 router = APIRouter(prefix="/items", tags=["items"])
+
+
+# =============================================================================
+# Reading pile management helpers
+# =============================================================================
+
+
+def _move_item_to_system_pile(
+    db: Session, user_id: int, item_id: int, target_key: str, remove_from_keys: list[str] | None = None
+) -> None:
+    """Move an item to a system pile, optionally removing from other system piles.
+
+    Args:
+        db: Database session
+        user_id: User ID who owns the piles
+        item_id: Item ID to move
+        target_key: System pile key to add item to (e.g. "currently_reading")
+        remove_from_keys: List of system pile keys to remove item from
+    """
+    # Get target pile
+    target_pile = db.execute(
+        select(Collection).where(
+            Collection.user_id == user_id,
+            Collection.system_key == target_key,
+        )
+    ).scalar_one_or_none()
+
+    if not target_pile:
+        return  # System pile doesn't exist yet
+
+    # Check if item is already in target pile
+    existing = db.execute(
+        select(CollectionItem).where(
+            CollectionItem.collection_id == target_pile.id,
+            CollectionItem.item_id == item_id,
+        )
+    ).scalar_one_or_none()
+
+    if not existing:
+        db.add(CollectionItem(collection_id=target_pile.id, item_id=item_id))
+
+    # Remove from other system piles if specified
+    if remove_from_keys:
+        for key in remove_from_keys:
+            pile = db.execute(
+                select(Collection).where(
+                    Collection.user_id == user_id,
+                    Collection.system_key == key,
+                )
+            ).scalar_one_or_none()
+
+            if pile:
+                item_in_pile = db.execute(
+                    select(CollectionItem).where(
+                        CollectionItem.collection_id == pile.id,
+                        CollectionItem.item_id == item_id,
+                    )
+                ).scalar_one_or_none()
+
+                if item_in_pile:
+                    db.delete(item_in_pile)
 
 
 # =============================================================================
@@ -48,6 +111,16 @@ class FileSchema(BaseModel):
         from_attributes = True
 
 
+class PileInfoSchema(BaseModel):
+    """Minimal pile info for item summaries."""
+
+    id: int
+    name: str
+    color: str | None
+    is_system: bool
+    system_key: str | None
+
+
 class ItemSummarySchema(BaseModel):
     """Brief item info for list views."""
 
@@ -57,13 +130,22 @@ class ItemSummarySchema(BaseModel):
     subtitle: str | None
     authors: list[str]
     cover_url: str | None
+    backdrop_url: str | None
     series_name: str | None
     series_index: float | None
     media_type: str
     formats: list[str]
+    piles: list[PileInfoSchema] | None = None
 
     class Config:
         from_attributes = True
+
+
+class ItemWithProgressSchema(ItemSummarySchema):
+    """Item summary with optional reading progress."""
+
+    progress: float | None = None
+    last_read_at: str | None = None
 
 
 class ItemDetailSchema(BaseModel):
@@ -87,6 +169,7 @@ class ItemDetailSchema(BaseModel):
     classification_code: str | None
     page_count: int | None
     cover_url: str | None
+    backdrop_url: str | None
     creators: list[CreatorSchema]
     files: list[FileSchema]
     date_added: str
@@ -119,7 +202,32 @@ def get_authors(item: Item) -> list[str]:
     ]
 
 
-def item_to_summary(item: Item) -> ItemSummarySchema:
+def get_piles_for_item(db: Session, item_id: int, user_id: int) -> list[PileInfoSchema]:
+    """Get all piles that contain an item."""
+    query = (
+        select(Collection)
+        .join(CollectionItem)
+        .where(
+            CollectionItem.item_id == item_id,
+            Collection.user_id == user_id,
+        )
+    )
+    collections = db.execute(query).scalars().all()
+    return [
+        PileInfoSchema(
+            id=c.id,
+            name=c.name,
+            color=c.color,
+            is_system=c.is_system,
+            system_key=c.system_key,
+        )
+        for c in collections
+    ]
+
+
+def item_to_summary(
+    item: Item, piles: list[PileInfoSchema] | None = None
+) -> ItemSummarySchema:
     """Convert Item to summary schema."""
     formats = sorted({f.format for f in item.files}) if item.files else []
     return ItemSummarySchema(
@@ -129,10 +237,38 @@ def item_to_summary(item: Item) -> ItemSummarySchema:
         subtitle=item.subtitle,
         authors=get_authors(item),
         cover_url=f"/api/items/{item.id}/cover" if item.cover_path else None,
+        backdrop_url=f"/api/items/{item.id}/backdrop" if item.backdrop_path else None,
         series_name=item.series_name,
         series_index=float(item.series_index) if item.series_index else None,
         media_type=item.media_type,
         formats=formats,
+        piles=piles,
+    )
+
+
+def item_to_summary_with_progress(
+    item: Item,
+    progress: float | None = None,
+    last_read_at: str | None = None,
+    piles: list[PileInfoSchema] | None = None,
+) -> ItemWithProgressSchema:
+    """Convert Item to summary schema with optional reading progress."""
+    formats = sorted({f.format for f in item.files}) if item.files else []
+    return ItemWithProgressSchema(
+        id=item.id,
+        uuid=item.uuid,
+        title=item.title,
+        subtitle=item.subtitle,
+        authors=get_authors(item),
+        cover_url=f"/api/items/{item.id}/cover" if item.cover_path else None,
+        backdrop_url=f"/api/items/{item.id}/backdrop" if item.backdrop_path else None,
+        series_name=item.series_name,
+        series_index=float(item.series_index) if item.series_index else None,
+        media_type=item.media_type,
+        formats=formats,
+        progress=progress,
+        last_read_at=last_read_at,
+        piles=piles,
     )
 
 
@@ -165,6 +301,7 @@ def item_to_detail(item: Item) -> ItemDetailSchema:
         classification_code=item.classification_code,
         page_count=item.page_count,
         cover_url=f"/api/items/{item.id}/cover" if item.cover_path else None,
+        backdrop_url=f"/api/items/{item.id}/backdrop" if item.backdrop_path else None,
         creators=creators,
         files=files,
         date_added=item.date_added.isoformat(),
@@ -179,6 +316,7 @@ def item_to_detail(item: Item) -> ItemDetailSchema:
 @router.get("", response_model=ItemListResponse)
 async def list_items(
     db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
     page: int = Query(1, ge=1),
     per_page: int = Query(24, ge=1, le=100),
     sort: str = Query("date_added", regex="^(title|date_added|series_name)$"),
@@ -189,6 +327,7 @@ async def list_items(
     tag: str | None = Query(None),
     media_type: str | None = Query(None, description="Filter by category: fiction or non-fiction"),
     format: str | None = Query(None),
+    include_piles: bool = Query(False, description="Include pile membership info"),
 ):
     """List items with pagination and filtering."""
     query = (
@@ -201,11 +340,17 @@ async def list_items(
 
     # Apply filters
     if q:
-        # Simple ILIKE search for now, can use full-text search later
+        # Search across title, description, series name, author names, and ISBN
         search_term = f"%{q}%"
         query = query.where(
             Item.title.ilike(search_term)
             | Item.description.ilike(search_term)
+            | Item.series_name.ilike(search_term)
+            | Item.isbn.ilike(search_term)
+            | Item.isbn13.ilike(search_term)
+            | Item.item_creators.any(
+                ItemCreator.creator.has(Creator.name.ilike(search_term))
+            )
         )
 
     if author_id:
@@ -247,8 +392,16 @@ async def list_items(
     result = db.execute(query)
     items = result.unique().scalars().all()
 
+    if include_piles:
+        item_summaries = [
+            item_to_summary(item, piles=get_piles_for_item(db, item.id, user.id))
+            for item in items
+        ]
+    else:
+        item_summaries = [item_to_summary(item) for item in items]
+
     return ItemListResponse(
-        items=[item_to_summary(item) for item in items],
+        items=item_summaries,
         total=total,
         page=page,
         per_page=per_page,
@@ -259,7 +412,9 @@ async def list_items(
 @router.get("/recent", response_model=list[ItemSummarySchema])
 async def recent_items(
     db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
     limit: int = Query(12, ge=1, le=50),
+    include_piles: bool = Query(False, description="Include pile membership info"),
 ):
     """Get recently added items."""
     query = (
@@ -273,7 +428,51 @@ async def recent_items(
     )
     result = db.execute(query)
     items = result.unique().scalars().all()
+
+    if include_piles:
+        return [
+            item_to_summary(item, piles=get_piles_for_item(db, item.id, user.id))
+            for item in items
+        ]
     return [item_to_summary(item) for item in items]
+
+
+@router.get("/reading/current")
+async def get_currently_reading(
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+    limit: int = Query(20, ge=1, le=50),
+    include_piles: bool = Query(False, description="Include pile membership info"),
+):
+    """Get items currently being read (started but not finished)."""
+    from librarian.db.models import ReadingProgress
+
+    # Query items with progress that aren't finished, ordered by last read
+    progress_records = (
+        db.query(ReadingProgress)
+        .filter(
+            ReadingProgress.user_id == user.id,
+            ReadingProgress.finished_at.is_(None),
+            ReadingProgress.progress > 0,
+        )
+        .order_by(ReadingProgress.last_read_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    items = []
+    for progress in progress_records:
+        item = db.get(Item, progress.item_id)
+        if item:
+            piles = get_piles_for_item(db, item.id, user.id) if include_piles else None
+            items.append({
+                "item": item_to_summary(item, piles=piles),
+                "progress": float(progress.progress),
+                "location_label": progress.location_label,
+                "last_read_at": progress.last_read_at.isoformat(),
+            })
+
+    return {"items": items}
 
 
 @router.get("/{item_id}", response_model=ItemDetailSchema)
@@ -349,6 +548,7 @@ async def set_cover(
     item_id: int,
     request: SetCoverRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Set item cover from a URL."""
     from librarian.covers import download_cover, process_cover, save_cover
@@ -409,13 +609,164 @@ async def upload_cover(
     )
 
 
+# =============================================================================
+# Backdrop endpoints
+# =============================================================================
+
+
+class SetBackdropRequest(BaseModel):
+    """Request to set backdrop from URL."""
+
+    url: str
+
+
+class SetBackdropResponse(BaseModel):
+    """Response after setting backdrop."""
+
+    success: bool
+    backdrop_url: str | None
+
+
+@router.get("/{item_id}/backdrop")
+async def get_backdrop(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Get the backdrop image for an item."""
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if not item.backdrop_path:
+        raise HTTPException(status_code=404, detail="No backdrop set")
+
+    backdrop_path = settings.library_root / item.backdrop_path
+    if not backdrop_path.exists():
+        raise HTTPException(status_code=404, detail="Backdrop file not found")
+
+    return FileResponse(
+        backdrop_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.post("/{item_id}/backdrop", response_model=SetBackdropResponse)
+async def set_backdrop(
+    item_id: int,
+    request: SetBackdropRequest,
+    db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
+):
+    """Set item backdrop from a URL."""
+    from librarian.covers import download_cover, process_cover
+
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Download the image
+    image_data = await download_cover(request.url)
+    if not image_data:
+        raise HTTPException(status_code=400, detail="Failed to download image from URL")
+
+    # Process (but allow larger size for backdrops)
+    processed = process_cover(image_data, max_size=1920)
+
+    # Save to backdrops directory
+    backdrops_dir = librarian_settings.backdrops_dir
+    backdrops_dir.mkdir(parents=True, exist_ok=True)
+    backdrop_file = backdrops_dir / f"{item.uuid}.jpg"
+    backdrop_file.write_bytes(processed)
+
+    # Update item's backdrop path
+    item.backdrop_path = f".backdrops/{item.uuid}.jpg"
+    db.commit()
+
+    return SetBackdropResponse(
+        success=True,
+        backdrop_url=f"/api/items/{item_id}/backdrop",
+    )
+
+
+@router.post("/{item_id}/backdrop/upload", response_model=SetBackdropResponse)
+async def upload_backdrop(
+    item_id: int,
+    file: Annotated[bytes, fastapi.File()],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Upload a backdrop image file."""
+    from librarian.covers import process_cover
+
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if not file:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    # Process (allow larger size for backdrops)
+    try:
+        processed = process_cover(file, max_size=1920)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to process image: {e}") from None
+
+    # Save to backdrops directory
+    backdrops_dir = librarian_settings.backdrops_dir
+    backdrops_dir.mkdir(parents=True, exist_ok=True)
+    backdrop_file = backdrops_dir / f"{item.uuid}.jpg"
+    backdrop_file.write_bytes(processed)
+
+    # Update item's backdrop path
+    item.backdrop_path = f".backdrops/{item.uuid}.jpg"
+    db.commit()
+
+    return SetBackdropResponse(
+        success=True,
+        backdrop_url=f"/api/items/{item_id}/backdrop",
+    )
+
+
+@router.delete("/{item_id}/backdrop", response_model=SetBackdropResponse)
+async def delete_backdrop(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Remove the backdrop image for an item."""
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if item.backdrop_path:
+        # Try to delete the file
+        backdrop_file = settings.library_root / item.backdrop_path
+        if backdrop_file.exists():
+            backdrop_file.unlink()
+
+        item.backdrop_path = None
+        db.commit()
+
+    return SetBackdropResponse(
+        success=True,
+        backdrop_url=None,
+    )
+
+
 @router.get("/{item_id}/files/{file_id}/download")
 async def download_file(
     item_id: int,
     file_id: int,
     db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
 ):
     """Download a file."""
+    # Check download permission
+    if not user.can_download:
+        raise HTTPException(
+            status_code=fastapi.status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to download files"
+        )
+
     file = db.get(File, file_id)
     if not file or file.item_id != item_id:
         raise HTTPException(status_code=404, detail="File not found")
@@ -503,7 +854,9 @@ class EditRequestListSchema(BaseModel):
 async def update_item(
     item_id: int,
     updates: ItemUpdateSchema,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Update item metadata directly."""
     from sqlalchemy.orm import joinedload
@@ -531,6 +884,19 @@ async def update_item(
     db.commit()
     db.refresh(item)
 
+    # Log metadata update
+    log_audit_event(
+        db=db,
+        event_type=AuditEventType.METADATA_UPDATED,
+        category="admin",
+        user=admin,
+        resource_type="item",
+        resource_id=item_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        details={"fields_updated": list(update_data.keys()), "title": item.title}
+    )
+
     return item_to_detail(item)
 
 
@@ -539,6 +905,7 @@ async def request_refile(
     item_id: int,
     refile: RefileRequestSchema,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Request a refile operation (moves files, processed by librarian)."""
     from librarian.db.models import EditRequest
@@ -640,6 +1007,7 @@ async def remove_creator(
     item_id: int,
     creator_id: int,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Remove a creator from an item."""
     # Get the item with all relationships
@@ -686,6 +1054,7 @@ async def request_author_fix(
     item_id: int,
     fix: AuthorFixSchema,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Request an author name fix (processed by librarian to update folders)."""
     from librarian.db.models import EditRequest
@@ -807,6 +1176,7 @@ async def enrich_item_by_isbn(
     item_id: int,
     request: EnrichByIsbnRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Search for metadata by ISBN to enrich an existing item."""
     # Validate item exists
@@ -846,6 +1216,7 @@ async def enrich_item_by_title(
     item_id: int,
     request: EnrichByTitleRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """Search for metadata by title and author to enrich an existing item."""
     # Validate item exists
@@ -886,6 +1257,7 @@ async def search_item_by_title(
     item_id: int,
     request: EnrichByTitleRequest,
     db: Annotated[Session, Depends(get_db)],
+    admin: CurrentAdmin,
 ):
     """
     Search for books by title/author, returning multiple candidates.
@@ -954,3 +1326,306 @@ async def search_item_by_title(
         query_title=request.title,
         query_author=request.author,
     )
+
+
+# =============================================================================
+# Reading progress endpoints
+# =============================================================================
+
+from librarian.db.models import ReadingProgress
+
+
+class ReadingProgressSchema(BaseModel):
+    """Reading progress for an item."""
+
+    item_id: int
+    file_id: int
+    progress: float  # 0.0 to 1.0
+    location: str | None
+    location_label: str | None
+    started_at: str
+    last_read_at: str
+    finished_at: str | None
+
+    class Config:
+        from_attributes = True
+
+
+class UpdateProgressRequest(BaseModel):
+    """Request to update reading progress."""
+
+    file_id: int
+    progress: float  # 0.0 to 1.0
+    location: str | None = None
+    location_label: str | None = None
+    finished: bool = False
+
+
+class ReadingProgressResponse(BaseModel):
+    """Response with reading progress."""
+
+    success: bool
+    progress: ReadingProgressSchema | None
+
+
+class CurrentlyReadingItem(BaseModel):
+    """Item in the currently reading list."""
+
+    item: ItemSummarySchema
+    progress: float
+    location_label: str | None
+    last_read_at: str
+
+
+class CurrentlyReadingResponse(BaseModel):
+    """Response with currently reading items."""
+
+    items: list[CurrentlyReadingItem]
+
+
+@router.get("/{item_id}/progress", response_model=ReadingProgressResponse)
+async def get_progress(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    """Get reading progress for an item."""
+    progress = db.query(ReadingProgress).filter(
+        ReadingProgress.user_id == user.id,
+        ReadingProgress.item_id == item_id
+    ).first()
+
+    if not progress:
+        return ReadingProgressResponse(success=True, progress=None)
+
+    return ReadingProgressResponse(
+        success=True,
+        progress=ReadingProgressSchema(
+            item_id=progress.item_id,
+            file_id=progress.file_id,
+            progress=float(progress.progress),
+            location=progress.location,
+            location_label=progress.location_label,
+            started_at=progress.started_at.isoformat(),
+            last_read_at=progress.last_read_at.isoformat(),
+            finished_at=progress.finished_at.isoformat() if progress.finished_at else None,
+        ),
+    )
+
+
+@router.post("/{item_id}/progress", response_model=ReadingProgressResponse)
+async def update_progress(
+    item_id: int,
+    request: UpdateProgressRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    """Update reading progress for an item."""
+    from datetime import datetime
+
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Verify file belongs to item
+    file = db.get(File, request.file_id)
+    if not file or file.item_id != item_id:
+        raise HTTPException(status_code=400, detail="Invalid file ID")
+
+    # Get or create progress record
+    progress = db.query(ReadingProgress).filter(
+        ReadingProgress.user_id == user.id,
+        ReadingProgress.item_id == item_id
+    ).first()
+
+    is_new_progress = progress is None
+    was_finished = progress.finished_at is not None if progress else False
+
+    if not progress:
+        progress = ReadingProgress(
+            user_id=user.id,
+            item_id=item_id,
+            file_id=request.file_id,
+        )
+        db.add(progress)
+
+    # Update progress
+    progress.file_id = request.file_id
+    progress.progress = request.progress
+    if request.location:
+        progress.location = request.location
+    if request.location_label:
+        progress.location_label = request.location_label
+
+    # Mark as finished if requested
+    if request.finished and not progress.finished_at:
+        progress.finished_at = datetime.now()
+        progress.progress = 1.0
+    elif not request.finished:
+        progress.finished_at = None
+
+    db.commit()
+    db.refresh(progress)
+
+    # Handle pile transitions
+    if request.finished and not was_finished:
+        # Book finished - move to "Read" pile, remove from reading piles
+        _move_item_to_system_pile(
+            db, user.id, item_id, "read", remove_from_keys=["currently_reading", "to_read"]
+        )
+        db.commit()
+    elif is_new_progress or request.progress > 0:
+        # Started/continued reading - move to "Currently Reading", remove from "To Read" and "Read"
+        # Only do this if not already finished
+        if not progress.finished_at:
+            _move_item_to_system_pile(
+                db, user.id, item_id, "currently_reading", remove_from_keys=["to_read", "read"]
+            )
+            db.commit()
+
+    return ReadingProgressResponse(
+        success=True,
+        progress=ReadingProgressSchema(
+            item_id=progress.item_id,
+            file_id=progress.file_id,
+            progress=float(progress.progress),
+            location=progress.location,
+            location_label=progress.location_label,
+            started_at=progress.started_at.isoformat(),
+            last_read_at=progress.last_read_at.isoformat(),
+            finished_at=progress.finished_at.isoformat() if progress.finished_at else None,
+        ),
+    )
+
+
+@router.post("/{item_id}/progress/finish", response_model=ReadingProgressResponse)
+async def mark_as_finished(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    """Mark an item as finished reading (without needing file ID).
+
+    Creates progress record if none exists. Useful for physical books or
+    manually marking items as read.
+    """
+    from datetime import datetime
+
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Get or create progress record
+    progress = db.query(ReadingProgress).filter(
+        ReadingProgress.user_id == user.id,
+        ReadingProgress.item_id == item_id
+    ).first()
+
+    was_finished = progress.finished_at is not None if progress else False
+
+    if not progress:
+        # Create a new progress record - use first file if available
+        file_id = item.files[0].id if item.files else None
+        progress = ReadingProgress(
+            user_id=user.id,
+            item_id=item_id,
+            file_id=file_id,
+            progress=1.0,
+        )
+        db.add(progress)
+
+    # Mark as finished
+    progress.progress = 1.0
+    progress.finished_at = datetime.now()
+
+    db.commit()
+    db.refresh(progress)
+
+    # Handle pile transition if not already finished
+    if not was_finished:
+        _move_item_to_system_pile(
+            db, user.id, item_id, "read", remove_from_keys=["currently_reading", "to_read"]
+        )
+        db.commit()
+
+    return ReadingProgressResponse(
+        success=True,
+        progress=ReadingProgressSchema(
+            item_id=progress.item_id,
+            file_id=progress.file_id,
+            progress=float(progress.progress),
+            location=progress.location,
+            location_label=progress.location_label,
+            started_at=progress.started_at.isoformat(),
+            last_read_at=progress.last_read_at.isoformat(),
+            finished_at=progress.finished_at.isoformat() if progress.finished_at else None,
+        ),
+    )
+
+
+@router.post("/{item_id}/progress/unfinish", response_model=ReadingProgressResponse)
+async def mark_as_unfinished(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    """Mark an item as not finished (resume reading).
+
+    Clears the finished_at date and moves back to Currently Reading pile.
+    """
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    progress = db.query(ReadingProgress).filter(
+        ReadingProgress.user_id == user.id,
+        ReadingProgress.item_id == item_id
+    ).first()
+
+    if not progress:
+        raise HTTPException(status_code=404, detail="No reading progress found")
+
+    # Clear finished status but keep progress
+    progress.finished_at = None
+
+    db.commit()
+    db.refresh(progress)
+
+    # Move back to Currently Reading
+    _move_item_to_system_pile(
+        db, user.id, item_id, "currently_reading", remove_from_keys=["read"]
+    )
+    db.commit()
+
+    return ReadingProgressResponse(
+        success=True,
+        progress=ReadingProgressSchema(
+            item_id=progress.item_id,
+            file_id=progress.file_id,
+            progress=float(progress.progress),
+            location=progress.location,
+            location_label=progress.location_label,
+            started_at=progress.started_at.isoformat(),
+            last_read_at=progress.last_read_at.isoformat(),
+            finished_at=None,
+        ),
+    )
+
+
+@router.delete("/{item_id}/progress")
+async def delete_progress(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+):
+    """Delete reading progress for an item (mark as unread)."""
+    progress = db.query(ReadingProgress).filter(
+        ReadingProgress.user_id == user.id,
+        ReadingProgress.item_id == item_id
+    ).first()
+
+    if progress:
+        db.delete(progress)
+        db.commit()
+
+    return {"success": True}

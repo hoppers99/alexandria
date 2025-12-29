@@ -31,6 +31,7 @@ services:
       - ALEXANDRIA_DB_HOST=postgres
       - ALEXANDRIA_DB_PORT=5432
       - ALEXANDRIA_LIBRARY_ROOT=/library
+      - ALEXANDRIA_DEBUG=true  # Enable debug mode for development (disables Secure cookie flag)
       # Auto-create admin user on first run (optional)
       - ALEXANDRIA_ADMIN_USERNAME=${ALEXANDRIA_ADMIN_USERNAME:-}
       - ALEXANDRIA_ADMIN_PASSWORD=${ALEXANDRIA_ADMIN_PASSWORD:-}

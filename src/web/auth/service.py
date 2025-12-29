@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session as DBSession
 from librarian.db.models import Session, User
 from web.auth.password import hash_password, verify_password
 from web.auth.session import create_session, delete_session, get_session
+from web.auth.validation import require_strong_password
 from web.config import settings
 
 
@@ -126,6 +127,12 @@ def register_user(
     """
     if not settings.enable_registration and not is_admin:
         raise RegistrationError("Registration is disabled")
+
+    # Validate password strength
+    try:
+        require_strong_password(password)
+    except ValueError as e:
+        raise RegistrationError(str(e))
 
     # Check if username exists
     stmt = select(User).where(User.username == username)

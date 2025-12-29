@@ -14,12 +14,20 @@
 		searchItemByTitle,
 		setItemCover,
 		uploadItemCover,
+		setItemBackdrop,
+		uploadItemBackdrop,
+		removeItemBackdrop,
+		getReadingProgress,
+		markAsFinished,
+		markAsUnfinished,
 		type ItemDetail,
 		type ItemUpdate,
 		type PileSummary,
 		type ItemEnrichedResult,
-		type ItemSearchCandidate
+		type ItemSearchCandidate,
+		type ReadingProgress
 	} from '$lib/api';
+	import { getLanguageName, formatDdcDisplay } from '$lib/format';
 	import { Lightbox, SearchCandidateCard, SearchResultCard } from '$lib/components';
 
 	interface Props {
@@ -38,12 +46,21 @@
 	let loadingPiles = $state(false);
 	let addingToPile = $state(false);
 
-	// Load piles this item is in on mount
+	// Reading progress state
+	let readingProgress = $state<ReadingProgress | null>(null);
+	let markingProgress = $state(false);
+
+	// Load piles and reading progress on mount
 	onMount(async () => {
 		try {
-			itemPiles = await getPilesForItem(item.id);
+			const [pilesResult, progressResult] = await Promise.all([
+				getPilesForItem(item.id),
+				getReadingProgress(item.id).catch(() => ({ success: false, progress: null }))
+			]);
+			itemPiles = pilesResult;
+			readingProgress = progressResult.progress;
 		} catch (err) {
-			console.error('Failed to load item piles:', err);
+			console.error('Failed to load item data:', err);
 		}
 	});
 
@@ -95,13 +112,41 @@
 		}
 	}
 
+	async function handleMarkAsFinished() {
+		markingProgress = true;
+		try {
+			const result = await markAsFinished(item.id);
+			readingProgress = result.progress;
+			// Refresh piles (item may have moved to "Read" pile)
+			itemPiles = await getPilesForItem(item.id);
+		} catch (err) {
+			console.error('Failed to mark as finished:', err);
+		} finally {
+			markingProgress = false;
+		}
+	}
+
+	async function handleMarkAsUnfinished() {
+		markingProgress = true;
+		try {
+			const result = await markAsUnfinished(item.id);
+			readingProgress = result.progress;
+			// Refresh piles (item may have moved to "Currently Reading" pile)
+			itemPiles = await getPilesForItem(item.id);
+		} catch (err) {
+			console.error('Failed to mark as unfinished:', err);
+		} finally {
+			markingProgress = false;
+		}
+	}
+
 	const authors = $derived(item.creators.filter((c) => c.role === 'author').map((c) => c.name));
 
 	const otherCreators = $derived(item.creators.filter((c) => c.role !== 'author'));
 
 	// Edit modal state
 	let showEditModal = $state(false);
-	let editTab = $state<'metadata' | 'enrich' | 'cover' | 'refile' | 'authors'>('metadata');
+	let editTab = $state<'metadata' | 'enrich' | 'cover' | 'backdrop' | 'refile' | 'authors'>('metadata');
 	let saving = $state(false);
 	let saveError = $state<string | null>(null);
 	let saveSuccess = $state<string | null>(null);
@@ -139,6 +184,69 @@
 	// Cover upload state
 	let coverFileInput = $state<HTMLInputElement | null>(null);
 	let coverUrlInput = $state('');
+
+	// Backdrop upload state
+	let backdropFileInput = $state<HTMLInputElement | null>(null);
+	let backdropUrlInput = $state('');
+
+	async function handleBackdropUpload(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (!input.files?.length) return;
+
+		saving = true;
+		saveError = null;
+		saveSuccess = null;
+
+		try {
+			const result = await uploadItemBackdrop(item.id, input.files[0]);
+			if (result.success && result.backdrop_url) {
+				item = { ...item, backdrop_url: `${result.backdrop_url}?t=${Date.now()}` };
+				saveSuccess = 'Backdrop uploaded successfully';
+			}
+		} catch (e) {
+			saveError = e instanceof Error ? e.message : 'Failed to upload backdrop';
+		} finally {
+			saving = false;
+			if (input) input.value = '';
+		}
+	}
+
+	async function handleBackdropFromUrl() {
+		if (!backdropUrlInput.trim()) return;
+
+		saving = true;
+		saveError = null;
+		saveSuccess = null;
+
+		try {
+			const result = await setItemBackdrop(item.id, backdropUrlInput.trim());
+			if (result.success && result.backdrop_url) {
+				item = { ...item, backdrop_url: `${result.backdrop_url}?t=${Date.now()}` };
+				saveSuccess = 'Backdrop set successfully';
+			}
+		} catch (e) {
+			saveError = e instanceof Error ? e.message : 'Failed to set backdrop';
+		} finally {
+			saving = false;
+			backdropUrlInput = '';
+		}
+	}
+
+	async function handleRemoveBackdrop() {
+		saving = true;
+		saveError = null;
+		saveSuccess = null;
+
+		try {
+			await removeItemBackdrop(item.id);
+			item = { ...item, backdrop_url: null };
+			saveSuccess = 'Backdrop removed';
+		} catch (e) {
+			saveError = e instanceof Error ? e.message : 'Failed to remove backdrop';
+		} finally {
+			saving = false;
+		}
+	}
 
 	async function handleCoverUpload(event: Event) {
 		const input = event.target as HTMLInputElement;
@@ -446,80 +554,100 @@
 	<title>{item.title} - Alexandria</title>
 </svelte:head>
 
-<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-	<!-- Back button -->
-	<a
-		href="/browse"
-		class="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-6"
-	>
-		<svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-		</svg>
-		Back to Library
-	</a>
-
-	<div class="flex flex-col md:flex-row gap-8">
-		<!-- Cover -->
-		<div class="flex-shrink-0">
-			<div
-				class="w-48 md:w-64 aspect-[2/3] bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden shadow-lg"
-			>
-				{#if item.cover_url}
-					<img src={item.cover_url} alt={item.title} class="w-full h-full object-cover" />
-				{:else}
-					<div class="w-full h-full flex items-center justify-center p-4">
-						<span class="text-gray-400 dark:text-gray-500 text-center">
-							{item.title}
-						</span>
-					</div>
-				{/if}
-			</div>
+<!-- Hero backdrop section -->
+<div class="relative">
+	<!-- Backdrop image (blurred cover as fallback, or custom backdrop) -->
+	{#if item.backdrop_url || item.cover_url}
+		<div class="absolute inset-x-0 top-0 h-48 md:h-64 lg:h-80 overflow-hidden">
+			<img
+				src={item.backdrop_url || item.cover_url}
+				alt=""
+				class="w-full h-full object-cover {item.backdrop_url ? '' : 'blur-sm scale-110'}"
+			/>
+			<!-- Gradient overlay for readability -->
+			<div class="absolute inset-0 bg-gradient-to-b from-black/30 via-black/50 to-gray-50 dark:to-gray-900"></div>
 		</div>
+	{:else}
+		<!-- Fallback gradient when no images available -->
+		<div class="absolute inset-x-0 top-0 h-48 md:h-64 lg:h-80 bg-gradient-to-b from-gray-300 to-gray-50 dark:from-gray-700 dark:to-gray-900"></div>
+	{/if}
 
-		<!-- Details -->
-		<div class="flex-1">
-			<div class="flex items-start justify-between gap-4">
-				<h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-					{item.title}
-				</h1>
-				<button
-					onclick={openEditModal}
-					class="flex-shrink-0 p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
-					aria-label="Edit book"
-				>
-					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							stroke-width="2"
-							d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-						/>
-					</svg>
-				</button>
-			</div>
+	<!-- Content overlaid on backdrop -->
+	<div class="relative z-10">
+		<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 md:pt-10">
+			<!-- Back button - styled for visibility on backdrop -->
+			<a
+				href="/browse"
+				class="inline-flex items-center text-white/90 hover:text-white mb-6 drop-shadow-md"
+			>
+				<svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+				</svg>
+				Back to Library
+			</a>
 
-			{#if item.subtitle}
-				<p class="text-xl text-gray-600 dark:text-gray-400 mb-2">
-					{item.subtitle}
-				</p>
-			{/if}
+			<div class="flex flex-col md:flex-row gap-8">
+				<!-- Cover -->
+				<div class="flex-shrink-0">
+					<div
+						class="w-48 md:w-64 aspect-[2/3] bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden shadow-2xl ring-1 ring-white/20"
+					>
+						{#if item.cover_url}
+							<img src={item.cover_url} alt={item.title} class="w-full h-full object-cover" />
+						{:else}
+							<div class="w-full h-full flex items-center justify-center p-4">
+								<span class="text-gray-400 dark:text-gray-500 text-center">
+									{item.title}
+								</span>
+							</div>
+						{/if}
+					</div>
+				</div>
 
-			{#if authors.length > 0}
-				<p class="text-lg text-gray-700 dark:text-gray-300 mb-4">
-					by {authors.join(', ')}
-				</p>
-			{/if}
+				<!-- Details -->
+				<div class="flex-1">
+					<div class="flex items-start justify-between gap-4">
+						<h1 class="text-3xl font-bold text-white drop-shadow-lg mb-2">
+							{item.title}
+						</h1>
+						<button
+							onclick={openEditModal}
+							class="flex-shrink-0 p-2 text-white/80 hover:text-white rounded-lg hover:bg-white/20"
+							aria-label="Edit book"
+						>
+							<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+								/>
+							</svg>
+						</button>
+					</div>
 
-			{#if item.series_name}
-				<p class="text-blue-600 dark:text-blue-400 mb-4">
-					<a href="/series/{encodeURIComponent(item.series_name)}" class="hover:underline">
-						{item.series_name}
-					</a>
-					{#if item.series_index}
-						<span class="text-gray-500 dark:text-gray-400">#{item.series_index}</span>
+					{#if item.subtitle}
+						<p class="text-xl text-white/80 drop-shadow mb-2">
+							{item.subtitle}
+						</p>
 					{/if}
-				</p>
-			{/if}
+
+					{#if authors.length > 0}
+						<p class="text-lg text-white/90 drop-shadow mb-4">
+							by {authors.join(', ')}
+						</p>
+					{/if}
+
+					{#if item.series_name}
+						<p class="text-blue-300 drop-shadow mb-4">
+							<a href="/series/{encodeURIComponent(item.series_name)}" class="hover:underline">
+								{item.series_name}
+							</a>
+							{#if item.series_index}
+								<span class="text-white/60">#{item.series_index}</span>
+							{/if}
+						</p>
+					{/if}
 
 			<!-- Action buttons -->
 			<div class="flex flex-wrap gap-3 mb-6">
@@ -556,7 +684,7 @@
 								d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
 							/>
 						</svg>
-						Read
+						{readingProgress && readingProgress.progress > 0 ? 'Continue Reading' : 'Read'}
 					</a>
 				{/if}
 
@@ -575,6 +703,82 @@
 					Add to Pile
 				</button>
 			</div>
+
+			<!-- Reading Progress -->
+			{#if readingProgress?.finished_at}
+				<!-- Finished state -->
+				<div class="mb-6 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+					<div class="flex items-center justify-between">
+						<div class="flex items-center gap-2">
+							<svg class="w-5 h-5 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
+								<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+							</svg>
+							<span class="text-sm font-medium text-green-800 dark:text-green-200">
+								Finished Reading
+							</span>
+						</div>
+						<button
+							onclick={handleMarkAsUnfinished}
+							disabled={markingProgress}
+							class="text-sm px-3 py-1 text-green-700 dark:text-green-300 hover:bg-green-100 dark:hover:bg-green-800/50 rounded-lg transition-colors disabled:opacity-50"
+						>
+							{markingProgress ? 'Updating...' : 'Mark as Unfinished'}
+						</button>
+					</div>
+					<p class="mt-2 text-xs text-green-600 dark:text-green-400">
+						Finished on {new Date(readingProgress.finished_at).toLocaleDateString()}
+					</p>
+				</div>
+			{:else if readingProgress && readingProgress.progress > 0}
+				<!-- In progress state -->
+				<div class="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+					<div class="flex items-center justify-between mb-2">
+						<span class="text-sm font-medium text-blue-800 dark:text-blue-200">
+							Reading Progress
+						</span>
+						<div class="flex items-center gap-3">
+							<span class="text-sm text-blue-600 dark:text-blue-300">
+								{Math.round(readingProgress.progress * 100)}%
+								{#if readingProgress.location_label}
+									· {readingProgress.location_label}
+								{/if}
+							</span>
+							<button
+								onclick={handleMarkAsFinished}
+								disabled={markingProgress}
+								class="text-sm px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50"
+							>
+								{markingProgress ? 'Updating...' : 'Mark as Finished'}
+							</button>
+						</div>
+					</div>
+					<div class="w-full h-2 bg-blue-200 dark:bg-blue-800 rounded-full overflow-hidden">
+						<div
+							class="h-full bg-blue-600 dark:bg-blue-400 transition-all duration-300"
+							style="width: {Math.round(readingProgress.progress * 100)}%;"
+						></div>
+					</div>
+					{#if readingProgress.last_read_at}
+						<p class="mt-2 text-xs text-blue-600 dark:text-blue-400">
+							Last read: {new Date(readingProgress.last_read_at).toLocaleDateString()} at {new Date(readingProgress.last_read_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+						</p>
+					{/if}
+				</div>
+			{:else}
+				<!-- Not started state - show Mark as Read button -->
+				<div class="mb-6">
+					<button
+						onclick={handleMarkAsFinished}
+						disabled={markingProgress}
+						class="inline-flex items-center px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg font-medium transition-colors disabled:opacity-50"
+					>
+						<svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+						</svg>
+						{markingProgress ? 'Updating...' : 'Mark as Read'}
+					</button>
+				</div>
+			{/if}
 
 			<!-- Description -->
 			{#if item.description}
@@ -616,7 +820,7 @@
 				{#if item.language}
 					<div>
 						<span class="text-gray-500 dark:text-gray-400">Language:</span>
-						<span class="ml-2 text-gray-900 dark:text-white">{item.language}</span>
+						<span class="ml-2 text-gray-900 dark:text-white">{getLanguageName(item.language)}</span>
 					</div>
 				{/if}
 
@@ -629,10 +833,8 @@
 
 				{#if item.classification_code}
 					<div>
-						<span class="text-gray-500 dark:text-gray-400">DDC:</span>
-						<span class="ml-2 text-gray-900 dark:text-white font-mono"
-							>{item.classification_code}</span
-						>
+						<span class="text-gray-500 dark:text-gray-400">Classification:</span>
+						<span class="ml-2 text-gray-900 dark:text-white">{formatDdcDisplay(item.classification_code)}</span>
 					</div>
 				{/if}
 
@@ -692,6 +894,8 @@
 					</div>
 				</div>
 			{/if}
+			</div>
+		</div>
 		</div>
 	</div>
 </div>
@@ -750,6 +954,14 @@
 					onclick={() => (editTab = 'cover')}
 				>
 					Cover
+				</button>
+				<button
+					class="px-4 py-3 text-sm font-medium {editTab === 'backdrop'
+						? 'text-blue-600 border-b-2 border-blue-600'
+						: 'text-gray-500 hover:text-gray-700 dark:text-gray-400'}"
+					onclick={() => (editTab = 'backdrop')}
+				>
+					Backdrop
 				</button>
 				<button
 					class="px-4 py-3 text-sm font-medium {editTab === 'refile'
@@ -1056,6 +1268,93 @@
 
 						<p class="text-xs text-gray-500 dark:text-gray-400">
 							Tip: You can also set a cover from search results in the Enrich tab.
+						</p>
+					</div>
+				{:else if editTab === 'backdrop'}
+					<div class="space-y-6">
+						<p class="text-sm text-gray-600 dark:text-gray-400">
+							Set a custom backdrop image for the hero section. If no backdrop is set, the cover image will be used with a blur effect.
+						</p>
+
+						<!-- Current backdrop preview -->
+						<div class="space-y-4">
+							<div class="w-full h-32 bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden shadow relative">
+								{#if item.backdrop_url}
+									<img src={item.backdrop_url} alt="Current backdrop" class="w-full h-full object-cover" />
+									<div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"></div>
+								{:else if item.cover_url}
+									<img src={item.cover_url} alt="Cover as backdrop" class="w-full h-full object-cover blur-sm scale-110" />
+									<div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"></div>
+									<span class="absolute bottom-2 left-2 text-xs text-white/80">Using blurred cover</span>
+								{:else}
+									<div class="w-full h-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
+										No backdrop or cover
+									</div>
+								{/if}
+							</div>
+
+							{#if item.backdrop_url}
+								<button
+									onclick={handleRemoveBackdrop}
+									disabled={saving}
+									class="text-sm text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
+								>
+									Remove custom backdrop (use blurred cover instead)
+								</button>
+							{/if}
+						</div>
+
+						<div class="flex-1 space-y-4">
+							<!-- Upload file -->
+							<div>
+								<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+									Upload Image
+								</label>
+								<input
+									type="file"
+									accept="image/*"
+									bind:this={backdropFileInput}
+									onchange={handleBackdropUpload}
+									disabled={saving}
+									class="block w-full text-sm text-gray-500 dark:text-gray-400
+										file:mr-4 file:py-2 file:px-4
+										file:rounded-lg file:border-0
+										file:text-sm file:font-medium
+										file:bg-blue-50 file:text-blue-700
+										dark:file:bg-blue-900/30 dark:file:text-blue-300
+										hover:file:bg-blue-100 dark:hover:file:bg-blue-900/50
+										file:cursor-pointer cursor-pointer
+										disabled:opacity-50 disabled:cursor-not-allowed"
+								/>
+							</div>
+
+							<!-- Or from URL -->
+							<div>
+								<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+									Or from URL
+								</label>
+								<div class="flex gap-2">
+									<input
+										type="url"
+										bind:value={backdropUrlInput}
+										placeholder="https://example.com/backdrop.jpg"
+										disabled={saving}
+										class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+										onkeydown={(e) => e.key === 'Enter' && handleBackdropFromUrl()}
+									/>
+									<button
+										onclick={handleBackdropFromUrl}
+										disabled={saving || !backdropUrlInput.trim()}
+										class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-medium"
+									>
+										{saving ? 'Setting...' : 'Set'}
+									</button>
+								</div>
+							</div>
+						</div>
+
+						<p class="text-xs text-gray-500 dark:text-gray-400">
+							Tip: For fiction books, try searching for thematic images (castles for fantasy, spaceships for sci-fi, etc.) on sites like Unsplash or Pexels.
 						</p>
 					</div>
 				{:else if editTab === 'refile'}

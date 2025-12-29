@@ -80,7 +80,7 @@
 				Search your library
 			</h2>
 			<p class="text-gray-500 dark:text-gray-500 mt-2">
-				Find books by title, description, author, or series name
+				Find books by title, description, author, series, or ISBN
 			</p>
 		</div>
 	{:else}

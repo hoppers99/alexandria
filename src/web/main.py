@@ -7,11 +7,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from web import __version__
 from web.api import auth, authors, items, piles, review, series, stats
 from web.config import settings
 from web.database import SessionLocal
+from web.middleware.rate_limit import limiter
 from web.startup import run_startup_tasks
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,14 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
 )
+
+# Rate limiting
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request, exc):
+    return {"detail": "Rate limit exceeded. Please try again later."}
 
 # CORS middleware for development
 app.add_middleware(

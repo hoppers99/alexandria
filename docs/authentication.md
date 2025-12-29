@@ -1,8 +1,17 @@
 # Authentication & User Management
 
+> **⚠️ IMPLEMENTATION STATUS**: Authentication is currently being implemented. Backend infrastructure is complete, frontend login flow is being debugged. See [AUTH_IMPLEMENTATION_STATUS.md](./AUTH_IMPLEMENTATION_STATUS.md) for current progress.
+
 ## Overview
 
 Alexandria supports multi-user authentication with role-based access control. Users can have either **User** or **Admin** roles.
+
+**Current State (2025-12-28)**:
+- ✅ Backend auth system fully implemented
+- ✅ Piles API protected (user isolation working)
+- 🔧 Frontend login UI created but debugging cookie persistence
+- ⏳ Other API endpoints not yet protected
+- ⏳ Rate limiting, password validation, audit logging not yet integrated
 
 ## Quick Start (Docker/Unraid)
 

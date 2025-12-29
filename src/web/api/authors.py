@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from librarian.db.models import Creator, ItemCreator
+from web.auth.dependencies import CurrentUser
 from web.database import get_db
 
 router = APIRouter(prefix="/authors", tags=["authors"])
@@ -61,6 +62,7 @@ class AuthorListResponse(BaseModel):
 @router.get("", response_model=AuthorListResponse)
 async def list_authors(
     db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     q: str | None = Query(None, description="Search query"),
@@ -140,6 +142,7 @@ async def list_authors(
 async def get_author(
     author_id: int,
     db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
 ):
     """Get author details."""
     author = db.get(Creator, author_id)

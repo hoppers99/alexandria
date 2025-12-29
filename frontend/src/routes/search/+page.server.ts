@@ -16,7 +16,7 @@ export const load: PageServerLoad = async ({ fetch, url }) => {
 
 	// Search across books, authors, and series in parallel
 	const [items, authors, series] = await Promise.all([
-		getItems({ q, page, per_page: 24 }, fetch),
+		getItems({ q, page, per_page: 24, include_piles: true }, fetch),
 		getAuthors({ q, per_page: 10 }, fetch),
 		getSeries({ q, per_page: 10 }, fetch)
 	]);

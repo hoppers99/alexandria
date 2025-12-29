@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
-	import type { ItemDetail } from '$lib/api';
+	import { getReadingProgress, updateReadingProgress, type ItemDetail } from '$lib/api';
 
 	interface Props {
 		data: {
@@ -20,6 +20,7 @@
 	let error: string | null = $state(null);
 	let currentFraction = $state(0);
 	let currentLocation = $state('');
+	let currentCfi: string | null = $state(null);
 	let sidebarOpen = $state(false);
 	let toc: any[] = $state([]);
 	let settings = $state({
@@ -29,7 +30,61 @@
 		hyphenate: true
 	});
 
-	const bookUrl = `/api/items/${data.item.id}/files/${data.readableFileId}/download`;
+	// Progress saving state
+	let lastSavedFraction = 0;
+	let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+	let initialLocationToRestore: string | null = null;
+
+	// Store IDs to avoid closure capture issues with reactive props
+	const itemId = data.item.id;
+	const fileId = data.readableFileId;
+	const bookUrl = `/api/items/${itemId}/files/${fileId}/download`;
+
+	// Save progress to the server (debounced)
+	function saveProgress() {
+		if (saveTimeout) clearTimeout(saveTimeout);
+
+		// Capture current values before the timeout
+		const fraction = currentFraction;
+		const cfi = currentCfi;
+		const location = currentLocation;
+
+		saveTimeout = setTimeout(async () => {
+			// Only save if progress changed significantly (>1%)
+			if (Math.abs(fraction - lastSavedFraction) < 0.01) return;
+
+			try {
+				await updateReadingProgress(
+					itemId,
+					fileId,
+					fraction,
+					cfi ?? undefined,
+					location || undefined
+				);
+				lastSavedFraction = fraction;
+			} catch (e) {
+				console.error('Failed to save reading progress:', e);
+			}
+		}, 2000); // Debounce 2 seconds
+	}
+
+	// Save progress immediately (for when leaving page)
+	async function saveProgressNow() {
+		if (saveTimeout) clearTimeout(saveTimeout);
+		if (Math.abs(currentFraction - lastSavedFraction) < 0.001) return;
+
+		try {
+			await updateReadingProgress(
+				itemId,
+				fileId,
+				currentFraction,
+				currentCfi ?? undefined,
+				currentLocation || undefined
+			);
+		} catch (e) {
+			console.error('Failed to save reading progress:', e);
+		}
+	}
 
 	function getReaderCSS() {
 		return `
@@ -73,6 +128,17 @@
 		if (!browser) return;
 
 		try {
+			// Load saved progress first
+			try {
+				const progressResponse = await getReadingProgress(itemId);
+				if (progressResponse.progress?.location) {
+					initialLocationToRestore = progressResponse.progress.location;
+					lastSavedFraction = progressResponse.progress.progress;
+				}
+			} catch (e) {
+				console.warn('Could not load reading progress:', e);
+			}
+
 			// Dynamically import foliate-js (it's an ES module)
 			await import('foliate-js/view.js');
 
@@ -96,9 +162,25 @@
 
 			// Set up event listeners
 			view.addEventListener('relocate', (e: CustomEvent) => {
-				const { fraction, location, tocItem } = e.detail;
+				const { fraction, location, tocItem, cfi } = e.detail;
 				currentFraction = fraction;
-				currentLocation = tocItem?.label || `Location ${location?.current || 0}`;
+				currentCfi = cfi || null;
+
+				// Build a user-friendly location label
+				if (tocItem?.label) {
+					// Use chapter/section name if available
+					currentLocation = tocItem.label;
+				} else if (location?.current !== undefined && location?.total) {
+					// Show "Page X of Y" style
+					currentLocation = `Page ${location.current + 1} of ${location.total}`;
+				} else if (location?.current !== undefined) {
+					currentLocation = `Page ${location.current + 1}`;
+				} else {
+					currentLocation = `${Math.round(fraction * 100)}%`;
+				}
+
+				// Save progress after each navigation
+				saveProgress();
 			});
 
 			view.addEventListener('load', (e: CustomEvent) => {
@@ -106,8 +188,17 @@
 				e.detail.doc.addEventListener('keydown', handleKeydown);
 			});
 
-			// Start at the beginning
-			view.renderer.next();
+			// Restore saved position or start at the beginning
+			if (initialLocationToRestore) {
+				try {
+					await view.goTo(initialLocationToRestore);
+				} catch (e) {
+					console.warn('Could not restore reading position:', e);
+					view.renderer.next();
+				}
+			} else {
+				view.renderer.next();
+			}
 
 			loading = false;
 		} catch (e) {
@@ -115,6 +206,11 @@
 			error = 'Failed to load the book. Please try again.';
 			loading = false;
 		}
+	});
+
+	// Save progress when leaving the page
+	onDestroy(() => {
+		saveProgressNow();
 	});
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -142,7 +238,7 @@
 	<title>Reading: {data.item.title} - Alexandria</title>
 </svelte:head>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window on:keydown={handleKeydown} on:beforeunload={saveProgressNow} />
 
 <div class="reader-wrapper">
 	<!-- Top toolbar -->

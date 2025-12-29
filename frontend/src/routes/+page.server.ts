@@ -1,14 +1,16 @@
-import { getRecentItems, getStats } from '$lib/api';
+import { getRecentItems, getStats, getCurrentlyReading } from '$lib/api';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ fetch }) => {
-	const [recentItems, stats] = await Promise.all([
-		getRecentItems(12, fetch),
-		getStats(fetch)
+	const [recentItems, stats, currentlyReading] = await Promise.all([
+		getRecentItems(12, fetch, true), // include piles
+		getStats(fetch),
+		getCurrentlyReading(6, fetch, true).catch(() => ({ items: [] })) // include piles
 	]);
 
 	return {
 		recentItems,
-		stats
+		stats,
+		currentlyReading: currentlyReading.items
 	};
 };

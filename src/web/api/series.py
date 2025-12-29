@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from librarian.db.models import Item, ItemCreator
 from web.api.items import ItemSummarySchema, get_authors
+from web.auth.dependencies import CurrentUser
 from web.database import get_db
 
 router = APIRouter(prefix="/series", tags=["series"])
@@ -54,6 +55,7 @@ class SeriesListResponse(BaseModel):
 @router.get("", response_model=SeriesListResponse)
 async def list_series(
     db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     q: str | None = Query(None, description="Search query"),
@@ -136,6 +138,8 @@ async def list_series(
 async def get_series(
     series_name: str,
     db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+    include_piles: bool = Query(False, description="Include pile membership info"),
 ):
     """Get all books in a series."""
     query = (
@@ -155,15 +159,23 @@ async def get_series(
         raise HTTPException(status_code=404, detail="Series not found")
 
     # Import here to avoid circular import
-    from web.api.items import item_to_summary
+    from web.api.items import get_piles_for_item, item_to_summary
 
     # Collect unique authors across the series
     all_authors: set[str] = set()
     for item in items:
         all_authors.update(get_authors(item))
 
+    if include_piles:
+        books = [
+            item_to_summary(item, piles=get_piles_for_item(db, item.id, user.id))
+            for item in items
+        ]
+    else:
+        books = [item_to_summary(item) for item in items]
+
     return SeriesDetailSchema(
         name=series_name,
-        books=[item_to_summary(item) for item in items],
+        books=books,
         authors=sorted(all_authors),
     )

@@ -37,6 +37,8 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "python-multipart>=0.0.21",
     "argon2-cffi>=25.1.0",
+    "email-validator>=2.3.0",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]
