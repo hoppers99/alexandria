@@ -39,6 +39,12 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "email-validator>=2.3.0",
     "slowapi>=0.1.9",
+    # TTS (Coqui runs in separate container, we just need HTTP client + task queue)
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "celery>=5.4",
+    "redis>=5.0",
+    "pydub>=0.25",  # For audio file manipulation
 ]
 
 [project.optional-dependencies]

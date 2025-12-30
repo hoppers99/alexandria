@@ -11,7 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from web import __version__
-from web.api import auth, authors, items, piles, review, series, stats
+from web.api import auth, authors, items, piles, review, series, settings as admin_settings, stats, tts
 from web.config import settings
 from web.database import SessionLocal
 from web.middleware.rate_limit import limiter
@@ -74,6 +74,8 @@ app.include_router(series.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(piles.router, prefix="/api")
 app.include_router(review.router, prefix="/api")
+app.include_router(admin_settings.router)  # Admin settings (includes prefix)
+app.include_router(tts.router)
 
 
 @app.get("/api/health")

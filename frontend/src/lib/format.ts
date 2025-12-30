@@ -284,3 +284,24 @@ export function formatDdcDisplay(code: string | null | undefined): string {
 	const categoryName = info.division || info.category;
 	return `${info.code} (${categoryName})`;
 }
+
+/**
+ * Format duration in seconds as human-readable time (MM:SS or HH:MM:SS)
+ * @param seconds - Duration in seconds
+ * @returns Formatted string like "1:23" or "1:23:45"
+ */
+export function formatDuration(seconds: number): string {
+	if (!isFinite(seconds) || seconds < 0) {
+		return '0:00';
+	}
+
+	const hours = Math.floor(seconds / 3600);
+	const minutes = Math.floor((seconds % 3600) / 60);
+	const secs = Math.floor(seconds % 60);
+
+	if (hours > 0) {
+		return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+	} else {
+		return `${minutes}:${secs.toString().padStart(2, '0')}`;
+	}
+}

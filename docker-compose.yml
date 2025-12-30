@@ -36,8 +36,15 @@ services:
       - ALEXANDRIA_ADMIN_USERNAME=${ALEXANDRIA_ADMIN_USERNAME:-}
       - ALEXANDRIA_ADMIN_PASSWORD=${ALEXANDRIA_ADMIN_PASSWORD:-}
       - ALEXANDRIA_ADMIN_EMAIL=${ALEXANDRIA_ADMIN_EMAIL:-}
+      # TTS configuration
+      - COQUI_TTS_URL=http://coqui-tts:5002
+      - CHATTERBOX_TTS_URL=http://chatterbox-tts:4123
+      - REDIS_URL=redis://redis:6379/0
+      - TTS_CACHE_DIR=/library/tts-cache
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -57,3 +64,75 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: alexandria-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  coqui-tts:
+    image: ghcr.io/coqui-ai/tts-cpu:latest
+    container_name: alexandria-coqui-tts
+    platform: linux/amd64  # Use x86 emulation on ARM64 (Apple Silicon)
+    entrypoint: ["python3", "-m", "TTS.server.server"]
+    command: ["--model_name", "tts_models/en/vctk/vits", "--port", "5002"]
+    ports:
+      - "5002:5002"
+    volumes:
+      - ./data/tts-cache:/cache
+      - ./data/tts-models:/root/.local/share/tts
+    environment:
+      - CACHE_DIR=/cache
+    # Uncomment below for GPU support (requires nvidia-docker)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+  chatterbox-tts:
+    image: travisvn/chatterbox-tts-api:latest-cpu
+    container_name: alexandria-chatterbox-tts
+    ports:
+      - "4123:4123"
+    volumes:
+      # Only mount voices directory - let cache be ephemeral to avoid permission issues
+      - chatterbox-voices:/app/voices
+    environment:
+      - PORT=4123
+      - EXAGGERATION=0.5  # Default emotion intensity (0.25-2.0)
+      - CFG_WEIGHT=0.4    # Pace control (0.0-1.0)
+      - TEMPERATURE=0.9   # Sampling variance (0.05-5.0)
+      - MAX_CHUNK_LENGTH=280  # Characters per chunk
+      # Set cache to writable directory
+      - HF_HOME=/tmp/huggingface
+      - TRANSFORMERS_CACHE=/tmp/huggingface
+      - HF_HUB_CACHE=/tmp/huggingface
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - HUGGING_FACE_HUB_TOKEN=
+    # CPU-only image. For GPU, use travisvn/chatterbox-tts-api:latest
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  chatterbox-voices:
+  chatterbox-cache:

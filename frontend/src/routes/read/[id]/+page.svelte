@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import { getReadingProgress, updateReadingProgress, type ItemDetail } from '$lib/api';
+	import AudioPlayer from '$lib/components/AudioPlayer.svelte';
 
 	interface Props {
 		data: {
@@ -12,6 +13,9 @@
 	}
 
 	let { data }: Props = $props();
+
+	// Mode toggle: 'text' or 'audio'
+	let mode: 'text' | 'audio' = $state('text');
 
 	let readerContainer: HTMLDivElement;
 	let view: any = $state(null);
@@ -261,18 +265,37 @@
 		</div>
 
 		<div class="toolbar-right">
-			<button class="icon-button" onclick={toggleFlow} aria-label="Toggle layout">
-				<svg class="icon" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
-					{#if settings.flow === 'paginated'}
-						<rect x="3" y="3" width="7" height="18" rx="1" />
-						<rect x="14" y="3" width="7" height="18" rx="1" />
+			<button
+				class="icon-button"
+				class:active={mode === 'audio'}
+				onclick={() => (mode = mode === 'text' ? 'audio' : 'text')}
+				aria-label="Toggle audio mode"
+			>
+				<svg class="icon" width="24" height="24" fill="currentColor">
+					{#if mode === 'text'}
+						<path
+							d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"
+						/>
 					{:else}
-						<rect x="3" y="3" width="18" height="18" rx="1" />
-						<line x1="3" y1="9" x2="21" y2="9" />
-						<line x1="3" y1="15" x2="21" y2="15" />
+						<path d="M4 6h16v12H4z" />
+						<path d="M4 9h16v6H4z" fill="none" stroke="currentColor" stroke-width="1.5" />
 					{/if}
 				</svg>
 			</button>
+			{#if mode === 'text'}
+				<button class="icon-button" onclick={toggleFlow} aria-label="Toggle layout">
+					<svg class="icon" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+						{#if settings.flow === 'paginated'}
+							<rect x="3" y="3" width="7" height="18" rx="1" />
+							<rect x="14" y="3" width="7" height="18" rx="1" />
+						{:else}
+							<rect x="3" y="3" width="18" height="18" rx="1" />
+							<line x1="3" y1="9" x2="21" y2="9" />
+							<line x1="3" y1="15" x2="21" y2="15" />
+						{/if}
+					</svg>
+				</button>
+			{/if}
 		</div>
 	</header>
 
@@ -319,50 +342,59 @@
 
 	<!-- Main reader area -->
 	<main class="reader-main">
-		{#if loading}
-			<div class="loading">
-				<div class="spinner"></div>
-				<p>Loading book...</p>
-			</div>
-		{:else if error}
-			<div class="error">
-				<p>{error}</p>
-				<a href="/book/{data.item.id}" class="btn">Back to Book</a>
+		{#if mode === 'text'}
+			{#if loading}
+				<div class="loading">
+					<div class="spinner"></div>
+					<p>Loading book...</p>
+				</div>
+			{:else if error}
+				<div class="error">
+					<p>{error}</p>
+					<a href="/book/{data.item.id}" class="btn">Back to Book</a>
+				</div>
+			{/if}
+			<div bind:this={readerContainer} class="reader-container" class:hidden={loading || error}></div>
+		{:else}
+			<!-- Audio player mode -->
+			<div class="audio-mode-container">
+				<AudioPlayer itemId={data.item.id} itemTitle={data.item.title} coverUrl={data.item.cover_url} />
 			</div>
 		{/if}
-		<div bind:this={readerContainer} class="reader-container" class:hidden={loading || error}></div>
 	</main>
 
-	<!-- Bottom navigation -->
-	<footer class="nav-bar">
-		<button class="nav-button" onclick={() => view?.goLeft()} aria-label="Previous page">
-			<svg class="icon" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
-				<path d="M15 6L9 12l6 6" />
-			</svg>
-		</button>
+	<!-- Bottom navigation (text mode only) -->
+	{#if mode === 'text'}
+		<footer class="nav-bar">
+			<button class="nav-button" onclick={() => view?.goLeft()} aria-label="Previous page">
+				<svg class="icon" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M15 6L9 12l6 6" />
+				</svg>
+			</button>
 
-		<div class="progress-container">
-			<input
-				type="range"
-				class="progress-slider"
-				min="0"
-				max="1"
-				step="any"
-				value={currentFraction}
-				oninput={(e) => view?.goToFraction(parseFloat(e.currentTarget.value))}
-			/>
-			<div class="progress-info">
-				<span class="location">{currentLocation}</span>
-				<span class="percent">{Math.round(currentFraction * 100)}%</span>
+			<div class="progress-container">
+				<input
+					type="range"
+					class="progress-slider"
+					min="0"
+					max="1"
+					step="any"
+					value={currentFraction}
+					oninput={(e) => view?.goToFraction(parseFloat(e.currentTarget.value))}
+				/>
+				<div class="progress-info">
+					<span class="location">{currentLocation}</span>
+					<span class="percent">{Math.round(currentFraction * 100)}%</span>
+				</div>
 			</div>
-		</div>
 
-		<button class="nav-button" onclick={() => view?.goRight()} aria-label="Next page">
-			<svg class="icon" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
-				<path d="M9 6l6 6-6 6" />
-			</svg>
-		</button>
-	</footer>
+			<button class="nav-button" onclick={() => view?.goRight()} aria-label="Next page">
+				<svg class="icon" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M9 6l6 6-6 6" />
+				</svg>
+			</button>
+		</footer>
+	{/if}
 </div>
 
 <style>
@@ -681,5 +713,16 @@
 
 	.percent {
 		margin-left: 8px;
+	}
+
+	.audio-mode-container {
+		max-width: 800px;
+		margin: 2rem auto;
+		padding: 0 1rem;
+	}
+
+	.icon-button.active {
+		background: rgba(25, 118, 210, 0.1);
+		color: var(--color-primary, #1976d2);
 	}
 </style>

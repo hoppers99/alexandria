@@ -327,6 +327,38 @@ class ReadingProgress(Base):
     )
 
 
+class TTSCache(Base):
+    """Caches generated TTS audio files for ebook chapters."""
+
+    __tablename__ = "tts_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("items.id", ondelete="CASCADE"), nullable=False
+    )
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    voice_id: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # File information
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(nullable=False)
+    file_size_bytes: Mapped[int | None] = mapped_column()
+
+    # Timestamp
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    # Relationships
+    item: Mapped["Item"] = relationship("Item", backref="tts_audio")
+
+    __table_args__ = (
+        Index("idx_tts_cache_item_chapter", "item_id", "chapter_number"),
+        Index("idx_tts_cache_voice", "voice_id"),
+        UniqueConstraint(
+            "item_id", "chapter_number", "voice_id", name="uq_tts_cache_item_chapter_voice"
+        ),
+    )
+
+
 # =============================================================================
 # Migration tracking
 # =============================================================================
@@ -453,6 +485,20 @@ class AuditLog(Base):
         Index("idx_audit_event_type", "event_type"),
         Index("idx_audit_created", "created_at"),
         Index("idx_audit_category", "event_category"),
+    )
+
+
+class SystemSettings(Base):
+    """System-wide settings and configuration."""
+
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text)
+    value_type: Mapped[str] = mapped_column(String(20), default="string")  # string, int, float, bool, json
+    description: Mapped[str | None] = mapped_column(String(500))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
     )
 
 

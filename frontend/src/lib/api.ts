@@ -1205,3 +1205,321 @@ export async function changePassword(
 
 	return response.json();
 }
+
+// =============================================================================
+// Text-to-Speech API
+// =============================================================================
+
+export interface VoiceInfo {
+	voice_id: string;
+	gender: 'male' | 'female';
+	accent: string;
+	age: string;
+	description: string;
+}
+
+export interface VoicesResponse {
+	voices: VoiceInfo[];
+	default_voice: string;
+}
+
+export interface ChapterInfo {
+	number: number;
+	title: string;
+	word_count: number;
+	estimated_duration_seconds: number;
+	has_audio: boolean;
+	audio_duration_seconds: number | null;
+	voice_id: string | null;
+}
+
+export interface ChaptersResponse {
+	item_id: number;
+	title: string;
+	total_chapters: number;
+	chapters: ChapterInfo[];
+}
+
+export interface GenerateResponse {
+	success: boolean;
+	message: string;
+	chapter_number: number;
+	voice_id: string;
+	estimated_duration_seconds: number | null;
+	task_id: string | null;
+}
+
+export interface AudioStatus {
+	chapter_number: number;
+	has_audio: boolean;
+	voice_id: string | null;
+	duration_seconds: number | null;
+	file_size_mb: number | null;
+	generated_at: string | null;
+}
+
+/**
+ * Get list of available TTS voices.
+ */
+export async function getVoices(
+	gender: 'male' | 'female' | 'all' = 'all',
+	customFetch?: FetchFunction
+): Promise<VoicesResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/tts/voices?gender=${gender}`, {
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Get list of chapters for an item with TTS status.
+ */
+export async function getItemChapters(
+	itemId: number,
+	voiceId?: string,
+	customFetch?: FetchFunction
+): Promise<ChaptersResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const url = voiceId
+		? `${API_BASE}/tts/items/${itemId}/chapters?voice_id=${voiceId}`
+		: `${API_BASE}/tts/items/${itemId}/chapters`;
+
+	const response = await fetchFn(url, {
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Generate TTS audio for a specific chapter.
+ * Uses system default voice if voiceId is not provided.
+ */
+export async function generateChapterAudio(
+	itemId: number,
+	chapterNumber: number,
+	voiceId?: string,
+	customFetch?: FetchFunction
+): Promise<GenerateResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const body = voiceId ? { voice_id: voiceId } : {};
+	const response = await fetchFn(
+		`${API_BASE}/tts/items/${itemId}/chapters/${chapterNumber}/generate`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+			credentials: 'include'
+		}
+	);
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Get audio URL for a chapter.
+ * Uses system default voice if voiceId is not provided.
+ */
+export function getChapterAudioUrl(
+	itemId: number,
+	chapterNumber: number,
+	voiceId?: string
+): string {
+	const url = `${API_BASE}/tts/items/${itemId}/chapters/${chapterNumber}/audio`;
+	return voiceId ? `${url}?voice_id=${voiceId}` : url;
+}
+
+/**
+ * Check if audio is available for a chapter.
+ * Uses system default voice if voiceId is not provided.
+ */
+export async function getChapterAudioStatus(
+	itemId: number,
+	chapterNumber: number,
+	voiceId?: string,
+	customFetch?: FetchFunction
+): Promise<AudioStatus> {
+	const fetchFn = customFetch ?? fetch;
+	const url = voiceId
+		? `${API_BASE}/tts/items/${itemId}/chapters/${chapterNumber}/status?voice_id=${voiceId}`
+		: `${API_BASE}/tts/items/${itemId}/chapters/${chapterNumber}/status`;
+
+	const response = await fetchFn(url, {
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Delete cached audio for a chapter (admin only).
+ * Uses system default voice if voiceId is not provided.
+ */
+export async function deleteChapterAudio(
+	itemId: number,
+	chapterNumber: number,
+	voiceId?: string,
+	customFetch?: FetchFunction
+): Promise<{ success: boolean; message: string }> {
+	const fetchFn = customFetch ?? fetch;
+	const url = voiceId
+		? `${API_BASE}/tts/items/${itemId}/chapters/${chapterNumber}/audio?voice_id=${voiceId}`
+		: `${API_BASE}/tts/items/${itemId}/chapters/${chapterNumber}/audio`;
+
+	const response = await fetchFn(url, {
+		method: 'DELETE',
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+// =============================================================================
+// Admin Settings API
+// =============================================================================
+
+export interface TTSSettings {
+	engine: 'coqui' | 'chatterbox';
+	voice: string;
+	exaggeration: number;
+	cfg_weight: number;
+	temperature: number;
+}
+
+export interface TTSSettingsUpdate {
+	engine?: 'coqui' | 'chatterbox';
+	voice?: string;
+	exaggeration?: number;
+	cfg_weight?: number;
+	temperature?: number;
+}
+
+export interface AdminVoiceInfo {
+	voice_id: string;
+	description: string;
+	gender?: string;
+	accent?: string;
+	age?: string;
+}
+
+export interface AvailableVoicesResponse {
+	engine: 'coqui' | 'chatterbox';
+	voices: AdminVoiceInfo[];
+}
+
+export interface EngineStatus {
+	engine: 'coqui' | 'chatterbox';
+	available: boolean;
+	error?: string;
+}
+
+export interface TTSAvailabilityResponse {
+	engines: EngineStatus[];
+}
+
+/**
+ * Get current TTS settings (admin only).
+ */
+export async function getTTSSettings(customFetch?: FetchFunction): Promise<TTSSettings> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/admin/settings/tts`, {
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Update TTS settings (admin only).
+ */
+export async function updateTTSSettings(
+	settings: TTSSettingsUpdate,
+	customFetch?: FetchFunction
+): Promise<TTSSettings> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/admin/settings/tts`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(settings),
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Get available voices for current or specified engine (admin only).
+ */
+export async function getAvailableVoices(
+	engine?: 'coqui' | 'chatterbox',
+	customFetch?: FetchFunction
+): Promise<AvailableVoicesResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const url = engine
+		? `${API_BASE}/admin/settings/tts/voices?engine=${engine}`
+		: `${API_BASE}/admin/settings/tts/voices`;
+
+	const response = await fetchFn(url, {
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
+
+/**
+ * Check which TTS engines are available (admin only).
+ */
+export async function getTTSAvailability(
+	customFetch?: FetchFunction
+): Promise<TTSAvailabilityResponse> {
+	const fetchFn = customFetch ?? fetch;
+	const response = await fetchFn(`${API_BASE}/admin/settings/tts/availability`, {
+		credentials: 'include'
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(data.detail || `HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	return response.json();
+}
